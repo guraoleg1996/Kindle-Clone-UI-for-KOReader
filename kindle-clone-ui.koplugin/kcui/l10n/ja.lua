@@ -214,4 +214,15 @@ return {
     __months_short = { "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月" },
     __date = "{Y}年{month}{d}日",
     __date_short = "{Y}年{month}{d}日",
+    -- Тексты самого KOReader (меню строки состояния), которых нет в его переводе на этот язык.
+    ["Anchors the width of the progress bar at the selected minimum."] = "進捗バーの幅を、選択した最小幅に固定します。",
+    ["Item max width"] = "項目の最大幅",
+    ["Lock width at minimum"] = "最小幅で固定",
+    ["Minimum percentage of screen width assigned to progress bar"] = "進捗バーに割り当てる画面幅の最小割合",
+    ["Minimum threshold to hide battery item"] = "バッテリー項目を隠す最小しきい値",
+    ["Show progress bar for the current chapter, instead of the whole book."] = "書籍全体ではなく、現在の章の進捗バーを表示します。",
+    ["Thickness and height: thick"] = "太さと高さ: 太い",
+    ["Thickness and height: thin"] = "太さと高さ: 細い",
+    ["This option allows certain items to update without needing user interaction (i.e page refresh). For example, the time item will update every minute regardless of user input."] = "一部の項目を、ユーザー操作(ページ更新など)なしで更新できるようにします。たとえば、時刻の項目は操作がなくても毎分更新されます。",
+    ["When the status bar is hidden, this setting will utilize the entirety of screen real estate (for your book) and will temporarily overlap the text when the status bar is shown."] = "ステータスバーを非表示にしている間は画面全体を(本のために)使い、ステータスバーを表示したときは一時的に本文に重なります。",
 }

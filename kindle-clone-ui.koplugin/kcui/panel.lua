@@ -21,7 +21,8 @@ local Toolbar = require("kcui/toolbar")
 local UIManager = require("ui/uimanager")
 local Widget = require("ui/widget/widget")
 local filemanagerutil = require("apps/filemanager/filemanagerutil")
-local _ = require("kcui/i18n").gettext
+local I18n = require("kcui/i18n")
+local _ = I18n.gettext
 local Common = require("kcui/common")
 local T = require("ffi/util").template
 local Screen = Device.screen
@@ -618,12 +619,13 @@ function More.showMenu(ui, area, root)
     end
 
     -- Текст пункта (бывает готовым или считается функцией).
+    -- (тексты KOReader без его перевода берутся из каталога плагина, см. I18n.native)
     local function textOf(item)
         if item.text_func then
             local ok, value = pcall(item.text_func)
-            if ok and value ~= nil then return tostring(value) end
+            if ok and value ~= nil then return I18n.native(tostring(value)) end
         end
-        return item.text
+        return I18n.native(item.text)
     end
 
     local function goBack()
@@ -644,7 +646,7 @@ function More.showMenu(ui, area, root)
     -- Один пункт KOReader -> одна кнопка выпадающего списка.
     local function buttonFor(item)
         local button = {
-            text = item.text,
+            text = I18n.native(item.text),
             text_func = item.text_func and function() return textOf(item) end or nil,
             enabled = item.enabled ~= false,
         }
@@ -704,7 +706,7 @@ function More.showMenu(ui, area, root)
                     end
                     local help = item.help_text_func and item.help_text_func(proxy) or item.help_text
                     if help then
-                        UIManager:show(require("ui/widget/infomessage"):new{ text = help })
+                        UIManager:show(require("ui/widget/infomessage"):new{ text = I18n.native(help) })
                     end
                 end)
                 if not ok then fail(err) end
@@ -713,11 +715,20 @@ function More.showMenu(ui, area, root)
         return button
     end
 
+    -- Во сколько раз пункт выше обычной строки: длинный текст переносится на 2–3 строки.
+    local function rowWeight(item)
+        local ok, weight = pcall(Toolbar.Dropdown.rowWeight, textOf(item) or "", {
+            chevron = item.sub_item_table ~= nil or item.sub_item_table_func ~= nil,
+            check = item.checked_func ~= nil or item.checked ~= nil,
+        })
+        return ok and type(weight) == "number" and weight or 1
+    end
+
     -- Делит пункты на страницы, чтобы строки не становились слишком мелкими.
     local function paginate(items, budget)
         local pages, page, used = {}, {}, 0
         for _i, item in ipairs(items) do
-            local cost = U(MENU_ROW_H) + (item.separator and U(MENU_LINE_H) or 0)
+            local cost = U(MENU_ROW_H) * rowWeight(item) + (item.separator and U(MENU_LINE_H) or 0)
             if #page > 0 and used + cost > budget then
                 table.insert(pages, page)
                 page, used = {}, 0
@@ -738,7 +749,8 @@ function More.showMenu(ui, area, root)
         end
 
         local available = Screen:getHeight() - U(20) - anchor_top - 2 * (U(1.5) + U(6))
-        local fixed = U(MENU_ROW_H) + U(MENU_LINE_H) -- строка «назад» и линия под ней
+        -- строка «назад» (её название тоже бывает длинным) и линия под ней
+        local fixed = U(MENU_ROW_H) * rowWeight({ text = More.backLabel(current.title) }) + U(MENU_LINE_H)
         local pages = paginate(items, available - fixed)
         if #pages > 1 then
             -- нужна ещё нижняя строка «Страница N из M»

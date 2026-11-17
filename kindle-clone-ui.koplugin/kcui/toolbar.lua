@@ -18,6 +18,8 @@ local UIManager = require("ui/uimanager")
 local Widget = require("ui/widget/widget")
 local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
+local I18n = require("kcui/i18n")
+local TextFit = require("kcui/textfit")
 local T = require("ffi/util").template
 local Screen = Device.screen
 local Gray = Common.Gray
@@ -27,6 +29,127 @@ local U = Common.U
 local ROOT = debug.getinfo(1, "S").source:match("^@(.*)/kcui/toolbar%.lua$")
 local ICONS = ROOT .. "/icons/toolbar"
 local DROPDOWN_ICONS = ROOT .. "/icons"
+
+-- ───────────── Текст пунктов выпадающего списка ─────────────
+-- Длинный текст не обрезается многоточием «…» и шрифт не уменьшается:
+-- пункт целиком переносится на 2 строки (в крайнем случае на 3) тем же шрифтом.
+
+-- Несколько строк текста как один виджет.
+local WrappedText = Widget:extend{
+    lines = nil,
+    w = 0,
+    h = 0,
+    line_h = 0,
+}
+
+function WrappedText:getSize()
+    return Geom:new{ w = self.w, h = self.h }
+end
+
+function WrappedText:getBaseline()
+    local first = self.lines and self.lines[1]
+    return first and first:getBaseline() or 0
+end
+
+function WrappedText:paintTo(bb, x, y)
+    local cy = y
+    for _i, line in ipairs(self.lines) do
+        line:paintTo(bb, x, cy)
+        cy = cy + self.line_h
+    end
+end
+
+function WrappedText:free()
+    for _i, line in ipairs(self.lines or {}) do line:free() end
+    self.lines = {}
+end
+
+-- Строка списка из n строк текста занимает во столько раз больше места, чем обычная.
+local function rowWeight(lines)
+    return 1 + 0.5 * ((lines or 1) - 1)
+end
+
+-- o: size (в единицах плагина), cap (пиксели), bold, fgcolor, wrap (можно ли переносить), max_lines.
+-- Возвращает виджет и число строк в нём.
+local function makeText(text, o)
+    local function line_widget(str, size, max_width)
+        return TextWidget:new{
+            text = str,
+            face = U.face("cfont", size),
+            bold = o.bold,
+            fgcolor = o.fgcolor,
+            max_width = max_width,
+        }
+    end
+    local widget = line_widget(text, o.size)
+    local natural = widget:getSize().w
+    if natural <= o.cap then return widget, 1 end
+    widget:free()
+
+    -- Обычные пункты: шрифт ВСЕГДА одного размера; не влезло — перенос на 2 строки (в крайнем случае 3).
+    if o.wrap then
+        local function measure(str)
+            local probe = line_widget(str, o.size)
+            local width = probe:getSize().w
+            probe:free()
+            return width
+        end
+        local lines = TextFit.wrap(text, measure, o.cap, o.max_lines or 3)
+        local widgets, width, line_h = {}, 0, 0
+        for _i, str in ipairs(lines) do
+            local piece = line_widget(str, o.size, o.cap)
+            local sz = piece:getSize()
+            width = math.max(width, sz.w)
+            line_h = math.max(line_h, sz.h)
+            widgets[#widgets + 1] = piece
+        end
+        return WrappedText:new{
+            lines = widgets,
+            w = width,
+            h = line_h * #widgets,
+            line_h = line_h,
+            face = widgets[1] and widgets[1].face,
+        }, #widgets
+    end
+
+    -- Мелкие заголовки и пункты с доп. значком: шрифт чуть уменьшается, потом многоточие.
+    local floor_size = o.size * I18n.minRatio()
+    local size = o.size * math.min(1, o.cap / natural * 0.98)
+    for _try = 1, 4 do
+        if size < floor_size then break end
+        local fitted = line_widget(text, size)
+        if fitted:getSize().w <= o.cap then return fitted, 1 end
+        fitted:free()
+        size = size * 0.97
+    end
+    return line_widget(text, floor_size, o.cap), 1
+end
+
+-- Меняет текст пункта (для пунктов, чей текст считается функцией text_func).
+local function retext(item, text)
+    item.text = text
+    local ok, widget = pcall(makeText, text, item.fit)
+    if ok and widget then
+        item.widget:free()
+        item.widget = widget
+    end
+end
+
+-- Размеры, общие для всех списков.
+local function dropdownMetrics()
+    local border = U(1.5)
+    local pad_x = U.compact() and U(22) or U(27)
+    local box_max = Screen:getWidth() - 2 * U(21.27)
+    return {
+        border = border,
+        pad_x = pad_x,
+        box_max = box_max,
+        text_room = box_max - 2 * border - 2 * pad_x, -- ширина под текст в самом широком списке
+        check_size = U(16),
+        check_extra = U(16) + U(10),                  -- галочка и отступ после неё
+        chevron_extra = U(8.3) + U(20),               -- стрелка «>» и отступ перед ней
+    }
+end
 
 local Box = Widget:extend{
     items = nil,
@@ -60,10 +183,7 @@ function Box:paintTo(bb, x, y)
         elseif item.small then
             if item.text_func then
                 local t = item.text_func()
-                if t ~= item.text then
-                    item.text = t
-                    item.widget:setText(t)
-                end
+                if t ~= item.text then retext(item, t) end
             end
             local text = item.widget
             item.y = cy - y
@@ -79,10 +199,7 @@ function Box:paintTo(bb, x, y)
         else
             if item.text_func then
                 local t = item.text_func()
-                if t ~= item.text then
-                    item.text = t
-                    item.widget:setText(t)
-                end
+                if t ~= item.text then retext(item, t) end
             end
             local text = item.widget
             item.y = cy - y
@@ -96,13 +213,13 @@ function Box:paintTo(bb, x, y)
                     height = box,
                     alpha = true,
                 }
-                icon:paintTo(bb, tx, cy + math.floor((self.item_h - box) / 2))
+                icon:paintTo(bb, tx, cy + math.floor((item.h - box) / 2))
                 icon:free()
                 tx = tx + box + U(10)
             end
-            text:paintTo(bb, tx, cy + math.floor((self.item_h - text:getSize().h) / 2))
+            text:paintTo(bb, tx, cy + math.floor((item.h - text:getSize().h) / 2))
             if item.extra_widget then
-                local main_top = cy + math.floor((self.item_h - text:getSize().h) / 2)
+                local main_top = cy + math.floor((item.h - text:getSize().h) / 2)
                 local main_cap = math.floor(text.face.size * 0.667 + 0.5)
                 local mid = main_top + text:getBaseline() - math.floor(main_cap / 2)
                 local right = x + self.width - b - self.pad_x
@@ -119,7 +236,7 @@ function Box:paintTo(bb, x, y)
             end
             if item.chevron_widget then
                 local chevron = item.chevron_widget:getSize()
-                item.chevron_widget:paintTo(bb, x + self.width - b - self.pad_x - chevron.w, cy + math.floor((self.item_h - chevron.h) / 2))
+                item.chevron_widget:paintTo(bb, x + self.width - b - self.pad_x - chevron.w, cy + math.floor((item.h - chevron.h) / 2))
             end
             cy = cy + item.h
         end
@@ -180,23 +297,16 @@ end
 
 function Dropdown:init()
     local items = flatten(self.buttons)
-    local face = U.face("cfont", 18)
-    local pad_x = U(27)
+    local m = dropdownMetrics()
+    local border, pad_x, check_size = m.border, m.pad_x, m.check_size
     local max_w = 0
-    local small_face = U.face("cfont", 15)
-    -- Слишком длинный текст обрезаем многоточием, чтобы он не вылезал за рамку.
-    local text_cap = Screen:getWidth() - 2 * U(21.27) - 2 * pad_x - 2 * U(1.5) - U(16) - U(10) - U(40)
+    local has_checks = false
+    for _i, item in ipairs(items) do
+        if item.checked_func then has_checks = true end
+    end
     for _i, item in ipairs(items) do
         if not item.separator then
             local compact = item.small or item.heading
-            item.widget = TextWidget:new{
-                text = item.text,
-                face = compact and small_face or face,
-                max_width = text_cap,
-                bold = item.heading,
-                fgcolor = item.heading and Gray.secondary
-                    or item.enabled and Blitbuffer.COLOR_BLACK or Gray.inactive,
-            }
             if item.icon then
                 item.icon_widget = ImageWidget:new{
                     original_in_nightmode = false,
@@ -218,7 +328,7 @@ function Dropdown:init()
                 extra_w = item.chevron_widget:getSize().w + U(20)
             end
             if item.extra then
-                item.extra_widget = TextWidget:new{ text = item.extra.text, face = small_face }
+                item.extra_widget = TextWidget:new{ text = item.extra.text, face = U.face("cfont", 15) }
                 extra_w = item.extra_widget:getSize().w + U(20)
                 if item.extra.icon then
                     item.extra_icon = ImageWidget:new{
@@ -231,39 +341,56 @@ function Dropdown:init()
                     extra_w = extra_w + U(17)
                 end
             end
+            -- Сколько места осталось тексту именно этого пункта (после галочки, стрелки, значка).
+            local cap = m.text_room - extra_w
+            if compact then
+                if item.icon then cap = cap - U(11) - U(6) end
+            elseif item.checked_func then
+                cap = cap - m.check_extra
+            end
+            item.fit = {
+                size = compact and 15 or 18,
+                cap = math.max(cap, U(60)),
+                bold = item.heading,
+                fgcolor = item.heading and Gray.secondary
+                    or item.enabled and Blitbuffer.COLOR_BLACK or Gray.inactive,
+                wrap = not compact and not item.extra,
+                max_lines = 3,
+            }
+            item.widget, item.lines = makeText(item.text, item.fit)
             if not item.small then
-                max_w = math.max(max_w, item.widget:getSize().w + extra_w)
+                -- Пункт, перенесённый на строки, считаем во всю доступную ширину.
+                local text_w = item.lines > 1 and item.fit.cap or item.widget:getSize().w
+                max_w = math.max(max_w, text_w + extra_w)
             end
         end
     end
-    local border = U(1.5)
-    local check_size = U(16)
-    local has_checks = false
-    for _i, item in ipairs(items) do
-        if item.checked_func then has_checks = true end
-    end
     if has_checks then
-        max_w = max_w + check_size + U(10)
+        max_w = max_w + m.check_extra
     end
     local pad_y = U(6)
     local sep_h = U(14)
     local screen_w, screen_h = Screen:getWidth(), Screen:getHeight()
-    local count, seps, smalls = 0, 0, 0
+    local weights, seps, smalls = 0, 0, 0
     for _i, item in ipairs(items) do
         if item.separator then seps = seps + 1
         elseif item.small or item.heading then smalls = smalls + 1
-        else count = count + 1 end
+        else weights = weights + rowWeight(item.lines) end
     end
     local bottom = self.max_bottom or screen_h - U(20)
     local top = self.fit and math.min(self.anchor_top, U(70)) or self.anchor_top
     local available = bottom - top - 2 * (border + pad_y) - seps * sep_h
-    local item_h = math.min(U(44), math.floor(available / math.max(1, count + smalls * 0.6)))
+    local item_h = math.min(U(44), math.floor(available / math.max(1, weights + smalls * 0.6)))
     local small_h = math.floor(item_h * 0.6)
+    local rows_h = 0
     for _i, item in ipairs(items) do
-        item.h = (item.small or item.heading) and small_h or item_h
+        if not item.separator then
+            item.h = (item.small or item.heading) and small_h or math.floor(item_h * rowWeight(item.lines))
+            rows_h = rows_h + item.h
+        end
     end
-    local width = math.min(screen_w - 2 * U(21.27), math.max(self.min_width or math.floor(screen_w * 0.4), max_w + 2 * pad_x + 2 * border))
-    local height = 2 * (border + pad_y) + count * item_h + smalls * small_h + seps * sep_h
+    local width = math.min(m.box_max, math.max(self.min_width or math.floor(screen_w * 0.4), max_w + 2 * pad_x + 2 * border))
+    local height = 2 * (border + pad_y) + rows_h + seps * sep_h
     self.box = Box:new{
         items = items,
         width = width,
@@ -291,6 +418,25 @@ function Dropdown:init()
     if Device:hasKeys() and not self.passthrough then
         self.key_events.AnyKeyPressed = { { Device.input.group.Any } }
     end
+end
+
+-- Сколько обычных строк займёт пункт с таким текстом: 1 — одна строка, 1.5 — две, 2 — три.
+-- Нужно спискам, которые сами делят пункты на страницы (opts: chevron, check).
+function Dropdown.rowWeight(text, opts)
+    opts = opts or {}
+    local m = dropdownMetrics()
+    local cap = m.text_room
+    if opts.chevron then cap = cap - m.chevron_extra end
+    if opts.check then cap = cap - m.check_extra end
+    local widget, lines = makeText(tostring(text or ""), {
+        size = 18,
+        cap = math.max(cap, U(60)),
+        fgcolor = Blitbuffer.COLOR_BLACK,
+        wrap = true,
+        max_lines = 3,
+    })
+    widget:free()
+    return rowWeight(lines)
 end
 
 function Dropdown:onAnyKeyPressed()

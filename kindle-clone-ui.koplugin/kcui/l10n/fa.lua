@@ -216,4 +216,9 @@ return {
     __months_short = { "ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر" },
     __date = "{d} {month} {Y}",
     __date_short = "{d} {month} {Y}",
+    -- Тексты самого KOReader (меню строки состояния), которых нет в его переводе на этот язык.
+    ["Anchors the width of the progress bar at the selected minimum."] = "عرض نوار پیشرفت را روی حداقل انتخاب‌شده ثابت می‌کند.",
+    ["Item max width"] = "حداکثر عرض مورد",
+    ["Items container height"] = "ارتفاع محفظه‌ی موارد",
+    ["Minimum threshold to hide battery item"] = "حداقل آستانه برای پنهان کردن مورد باتری",
 }

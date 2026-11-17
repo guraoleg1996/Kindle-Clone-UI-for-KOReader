@@ -214,4 +214,7 @@ return {
     __months_short = { "jan.", "feb.", "mars", "apr.", "mai", "juni", "juli", "aug.", "sep.", "okt.", "nov.", "des." },
     __date = "{d}. {month} {Y}",
     __date_short = "{d}. {month} {Y}",
+    -- Тексты самого KOReader (меню строки состояния), которых нет в его переводе на этот язык.
+    ["Anchors the width of the progress bar at the selected minimum."] = "Låser bredden på fremdriftsindikatoren til det valgte minimumet.",
+    ["Lock width at minimum"] = "Lås bredden til minimum",
 }

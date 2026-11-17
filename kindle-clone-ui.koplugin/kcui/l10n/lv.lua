@@ -214,4 +214,15 @@ return {
     __months_short = { "janv.", "febr.", "marts", "apr.", "maijs", "jūn.", "jūl.", "aug.", "sept.", "okt.", "nov.", "dec." },
     __date = "{Y}. gada {d}. {month}",
     __date_short = "{Y}. gada {d}. {month}",
+    -- Тексты самого KOReader (меню строки состояния), которых нет в его переводе на этот язык.
+    ["Anchors the width of the progress bar at the selected minimum."] = "Fiksē progresa joslas platumu izvēlētajā minimumā.",
+    ["Item max width"] = "Elementa maksimālais platums",
+    ["Lock width at minimum"] = "Fiksēt platumu minimumā",
+    ["Minimum percentage of screen width assigned to progress bar"] = "Minimālais ekrāna platuma procents, kas atvēlēts progresa joslai",
+    ["Minimum threshold to hide battery item"] = "Minimālais slieksnis akumulatora elementa paslēpšanai",
+    ["Show progress bar for the current chapter, instead of the whole book."] = "Rādīt progresa joslu pašreizējai nodaļai, nevis visai grāmatai.",
+    ["Thickness and height: thick"] = "Biezums un augstums: biezs",
+    ["Thickness and height: thin"] = "Biezums un augstums: tievs",
+    ["This option allows certain items to update without needing user interaction (i.e page refresh). For example, the time item will update every minute regardless of user input."] = "Šī opcija ļauj noteiktiem elementiem atjaunoties bez lietotāja darbības (piemēram, lapas atsvaidzināšanas). Piemēram, laika elements atjaunosies katru minūti neatkarīgi no lietotāja ievades.",
+    ["When the status bar is hidden, this setting will utilize the entirety of screen real estate (for your book) and will temporarily overlap the text when the status bar is shown."] = "Kad statusa josla ir paslēpta, šis iestatījums izmanto visu ekrāna laukumu (grāmatai), un brīdī, kad statusa josla tiek parādīta, tā uz laiku pārklāj tekstu.",
 }

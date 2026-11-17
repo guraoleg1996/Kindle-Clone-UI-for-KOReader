@@ -215,4 +215,7 @@ return {
     __months_short = { "tammik.", "helmik.", "maalisk.", "huhtik.", "toukok.", "kesäk.", "heinäk.", "elok.", "syysk.", "lokak.", "marrask.", "jouluk." },
     __date = "{d}. {month} {Y}",
     __date_short = "{d}. {month} {Y}",
+    -- Тексты самого KOReader (меню строки состояния), которых нет в его переводе на этот язык.
+    ["Anchors the width of the progress bar at the selected minimum."] = "Lukitsee edistymispalkin leveyden valittuun vähimmäisarvoon.",
+    ["Lock width at minimum"] = "Lukitse leveys vähimmäisarvoon",
 }

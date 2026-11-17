@@ -79,6 +79,54 @@ function I18n.pgettext(ctx, msgid)
     return translate(ctx, msgid)
 end
 
+-- Тексты самого KOReader (меню «Строка состояния» и т.п.), которых нет в его переводе
+-- на этот язык и которые поэтому остаются английскими: ищем их в каталоге плагина.
+-- Работает и для текстов с подставленными значениями: «Font size: 36» находится
+-- по шаблону «Font size: %1», а в переводе значение ставится на место %1.
+-- Если у KOReader перевод есть, текст уже не английский, ничего не находится и он остаётся как был.
+local native_templates = {} -- код языка -> список шаблонов
+
+local function templatesOf(cat, code)
+    local list = native_templates[code]
+    if list then return list end
+    list = {}
+    for key, value in pairs(cat) do
+        if type(key) == "string" and type(value) == "string" and value ~= ""
+                and key:find("%%%d") and not key:find("\004", 1, true) then
+            local order = {}
+            local escaped = key:gsub("[%^%$%(%)%.%[%]%*%+%-%?%%]", "%%%0")
+            local pattern = "^" .. escaped:gsub("%%%%(%d)", function(n)
+                order[#order + 1] = tonumber(n)
+                return "(.-)"
+            end) .. "$"
+            list[#list + 1] = { pattern = pattern, order = order, text = value, size = #key }
+        end
+    end
+    table.sort(list, function(a, b) return a.size > b.size end)
+    native_templates[code] = list
+    return list
+end
+
+function I18n.native(text)
+    if type(text) ~= "string" or text == "" then return text end
+    local cat = catalog()
+    if not cat then return text end
+    local direct = cat[text]
+    if type(direct) == "string" and direct ~= "" then return direct end
+    for _i, template in ipairs(templatesOf(cat, I18n.lang())) do
+        local found = { text:match(template.pattern) }
+        if #found > 0 then
+            return (template.text:gsub("%%(%d)", function(n)
+                for index, number in ipairs(template.order) do
+                    -- подставляемое значение тоже переводим («Dot (·)» в «Item separator: %1»)
+                    if number == tonumber(n) then return I18n.native(found[index]) end
+                end
+            end))
+        end
+    end
+    return text
+end
+
 -- Languages written right to left (the interface is mirrored for them).
 function I18n.rtl()
     local ok, BD = pcall(require, "ui/bidi")
