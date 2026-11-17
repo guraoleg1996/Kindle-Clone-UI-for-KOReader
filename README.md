@@ -1,5 +1,10 @@
 # Kindle Clone UI for KOReader
 
+<img width="1376" height="768" alt="Gemini_Generated_Image_qirgqcqirgqcqirg" src="https://github.com/user-attachments/assets/e8e6065b-d0ff-4929-a40d-fb626f305111" />
+
+<br>
+<br>
+
 Makes KOReader look and work like a Kindle. Both list and grid view and in-book features like bookmarks etc. 
 
 It's not a 1:1 replica, just as close as I could make it. This fork was created for personal use—to share with friends and loved ones—as well as for anyone who wants to make their KOReader look a bit like a Kindle.
