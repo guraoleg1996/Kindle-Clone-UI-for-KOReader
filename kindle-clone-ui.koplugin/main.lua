@@ -7,7 +7,7 @@ if (Version:getNormalizedCurrentVersion() or 0) < MINIMUM_VERSION then
     local InfoMessage = require("ui/widget/infomessage")
     local UIManager = require("ui/uimanager")
     local T = require("ffi/util").template
-    local _ = require("gettext")
+    local _ = require("kcui/i18n").gettext
     UIManager:scheduleIn(3, function()
         UIManager:show(InfoMessage:new{
             text = T(_("Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."),
@@ -43,7 +43,7 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local filemanagerutil = require("apps/filemanager/filemanagerutil")
 local logger = require("logger")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
 local Screen = Device.screen
 local Books = Library.Books
@@ -344,6 +344,23 @@ local function decorate(menu, active, orig_init)
         menu[1] = VerticalGroup:new{ align = "left", top, menu[1], bar }
     end
     menu.dimen.h = menu.dimen.h + top.dimen.h + header_h + bar.dimen.h
+    if active ~= "library" then
+        -- Screens that lie over the file manager or a book (history, collections, ...)
+        -- swallow swipes, so the drawer would only open from the arrow. A downward
+        -- swipe that starts in the top area opens it here as well. (A swipe event
+        -- carries the place where the finger touched down in `pos`; it has no
+        -- `start_pos`, which is why this never fired before.)
+        local swipe = menu.onSwipe
+        menu.onSwipe = function(self, arg, ges)
+            local pos = ges and ges.pos
+            if pos and ges.direction == "south"
+                    and pos.y <= math.max(top.dimen.h, U(130), math.floor(Screen:getHeight() / 8)) then
+                Panel.openDrawer(ui)
+                return true
+            end
+            if swipe then return swipe(self, arg, ges) end
+        end
+    end
 end
 
 local orig_booklist_init = BookList.init
@@ -368,8 +385,38 @@ end
 local orig_show_coll_list = FileManagerCollection.onShowCollList
 FileManagerCollection.onShowCollList = function(manager, selection, caller_callback, no_dialog)
     local adding = manager._kcui_adding
+    -- KOReader keeps only one "collection list" in manager.coll_list, and the back
+    -- arrow and the Library tab close exactly that one. Opening a second list while
+    -- one is already shown (pressing "Collections" in the drawer again) left the
+    -- first one without any way to close it, so it is reused instead.
+    local previous = manager.coll_list
+    if previous and not UIManager:isWidgetShown(previous) then previous = nil end
+    if previous and selection == nil then
+        local stack = UIManager._window_stack
+        for i = #stack, 1, -1 do
+            local widget = stack[i].widget
+            if widget == previous then break end
+            if widget == manager.booklist_menu and widget.close_callback then
+                widget.close_callback()
+            end
+        end
+        return true
+    end
+    local previous_selection = manager.selected_collections
     local result = orig_show_coll_list(manager, selection, caller_callback, no_dialog)
     local list = manager.coll_list
+    if previous and list and list ~= previous then
+        -- a selection list opened over the list: when it closes, the list below
+        -- becomes the current one again
+        local close = list.close_callback
+        list.close_callback = function(...)
+            close(...)
+            if not UIManager:isWidgetShown(list) and manager.coll_list ~= previous then
+                manager.coll_list = previous
+                manager.selected_collections = previous_selection
+            end
+        end
+    end
     if selection ~= nil and list then
         list._kcui_apply = function()
             manager:showCollListDialog(caller_callback, true)
@@ -387,6 +434,16 @@ end
 local orig_add_button = FileManagerCollection.genAddToCollectionButton
 FileManagerCollection.genAddToCollectionButton = function(manager, ...)
     local button = orig_add_button(manager, ...)
+    -- KOReader labels this button "Collections…": the dots mean "another window
+    -- opens". That window has its own title, so the dots are dropped here (this
+    -- works for every language, the dots come with KOReader's own translation).
+    if type(button.text) == "string" then
+        local text = button.text
+        for _i, pattern in ipairs({ "\194\160…$", "%s*…$", "%s*%.%.%.$" }) do
+            text = text:gsub(pattern, "")
+        end
+        button.text = text
+    end
     local callback = button.callback
     button.callback = function()
         manager._kcui_adding = true

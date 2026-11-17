@@ -26,7 +26,7 @@ local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local util = require("util")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
 local Screen = Device.screen
 local Gray = Common.Gray
@@ -625,14 +625,22 @@ function SelectionBar:item()
 end
 
 function SelectionBar:layout()
-    local cell_pad = U(18)
-    local width = 0
-    for _i, cell in ipairs(self.cells) do
-        if cell.text then
-            cell.label = TextWidget:new{ text = cell.text, face = self.face, bold = true, fgcolor = cell.active and WHITE or BLACK }
+    local cell_pad, width
+    -- the bar keeps its design size unless the labels (a long translation, a
+    -- narrow phone) would make it wider than the screen
+    local limit = Screen:getWidth() - U(16)
+    for _i, k in ipairs{ 1, 0.9, 0.8, 0.7 } do
+        self.face = U.face("cfont", 16 * k)
+        cell_pad = U(18 * k)
+        width = 0
+        for _j, cell in ipairs(self.cells) do
+            if cell.text then
+                cell.label = TextWidget:new{ text = cell.text, face = self.face, bold = true, fgcolor = cell.active and WHITE or BLACK }
+            end
+            cell.w = (cell.label or cell.icon):getSize().w + 2 * cell_pad
+            width = width + cell.w
         end
-        cell.w = (cell.label or cell.icon):getSize().w + 2 * cell_pad
-        width = width + cell.w
+        if width <= limit then break end
     end
     local height = self.bar_h
     if self.palette then

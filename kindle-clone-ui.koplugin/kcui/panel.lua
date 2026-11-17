@@ -21,7 +21,7 @@ local Toolbar = require("kcui/toolbar")
 local UIManager = require("ui/uimanager")
 local Widget = require("ui/widget/widget")
 local filemanagerutil = require("apps/filemanager/filemanagerutil")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
 local T = require("ffi/util").template
 local Screen = Device.screen
@@ -334,7 +334,7 @@ function TopBar.new(ui, window, no_chevron, hide_network, hide_localsend)
     end
 
     function bar:onTapMenu()
-        ui.menu:onShowMenu()
+        require("kcui/panel").openDrawer(ui)
         return true
     end
 
@@ -421,8 +421,13 @@ function TopBar.expanded(ui, window)
     }
     local function update(charging)
         local now = os.time()
-        local date = Dates.day(now)
         header.when:setText(Dates.time(now))
+        local avail = w - header.left - header.when:getSize().w - U(8.8) - U(4.4) - U(9.5) - header.right
+        local date = Dates.day(now, true)
+        if U.textWidth(date, "cfont", 17) > avail then
+            date = Dates.day(now, false)
+        end
+        header.date:setMaxWidth(avail)
         header.date:setText(date)
         local powerd = Device:getPowerDevice()
         local capacity = Device:hasBattery() and powerd:getCapacity() or 0
@@ -481,19 +486,38 @@ end
 
 function More.dropdown(area, buttons, keep_open)
     local notch = U(Common.Paint.NOTCH)
-    UIManager:show(Toolbar.Dropdown:new{
+    local dropdown = Toolbar.Dropdown:new{
         buttons = buttons,
         anchor_right = Screen:getWidth() - U(8),
         anchor_top = area.y + math.floor(area.h / 2) + U(18) + notch,
         notch_x = area.x + math.floor(area.w / 2),
         close_first = not keep_open,
         keep_open = keep_open,
-    })
+    }
+    UIManager:show(dropdown)
+    return dropdown
 end
 
-function More.showProgress(ui, area)
+-- Текст строки «назад»: стрелка и название того меню, в котором мы сейчас.
+function More.backLabel(title)
+    local arrow = require("kcui/i18n").rtl() and "›" or "‹"
+    return arrow .. "  " .. (title or "")
+end
+
+function More.showPluginProgress(ui, area, back)
     local tracking = More.tracksReadingTime(ui)
+    local dropdown
     local rows = {}
+    if back then
+        table.insert(rows, { {
+            text = More.backLabel(_("Plugin's bar")),
+            callback = function()
+                UIManager:close(dropdown)
+                back()
+            end,
+        } })
+        table.insert(rows, {})
+    end
     local function choice(option, current, key, other, other_key)
         return { {
             text = option.text,
@@ -528,7 +552,365 @@ function More.showProgress(ui, area)
             UIManager:setDirty("all", "ui")
         end,
     } })
-    More.dropdown(area, rows, true)
+    table.insert(rows, {})
+    table.insert(rows, { {
+        text_func = function()
+            local footer = ui.view and ui.view.footer
+            local size = footer and footer.settings and footer.settings.text_font_size or 12.5
+            return T(_("Font size: %1"), size)
+        end,
+        callback = function()
+            local SpinWidget = require("ui/widget/spinwidget")
+            local footer = ui.view and ui.view.footer
+            if not footer then return end
+            local current = footer.settings.text_font_size or 12.5
+
+            UIManager:show(SpinWidget:new{
+                title_text = _("Font size"),
+                value = current,
+                value_min = 10,
+                value_max = 18,
+                value_step = 0.5,
+                value_hold_step = 1,
+                precision = "%.1f",
+                ok_text = _("Set"),
+                callback = function(spin)
+                    footer.settings.text_font_size = spin.value
+                    G_reader_settings:saveSetting("footer", footer.settings)
+                    require("kcui/restyle").refreshStatusBar(ui)
+                    UIManager:setDirty("all", "ui")
+                end,
+            })
+        end,
+    } })
+    dropdown = More.dropdown(area, rows, true)
+end
+
+-- Родные меню KOReader («Alternative», «KOReader's bar») в стиле плагина.
+--
+-- Пункты KOReader (с галочками, вложенными списками, окнами настройки)
+-- превращаются в такой же выпадающий список, как у «Plugin's bar».
+-- root = { title = "...", items = { пункты KOReader }, back = function() ... end }
+-- Вложенные списки открываются на месте; строка «‹ Название» сверху ведёт назад.
+-- Длинные списки делятся на страницы (нижняя строка «Страница N из M» листает).
+local MENU_ROW_H = 40  -- ориентир высоты строки (условные единицы плагина)
+local MENU_LINE_H = 14 -- высота разделительной линии
+
+function More.showMenu(ui, area, root)
+    local current = root
+    local dropdown, proxy
+    local closed = false
+    local rebuild
+    local notch = U(Common.Paint.NOTCH)
+    local anchor_top = area.y + math.floor(area.h / 2) + U(18) + notch
+
+    local function fail(err)
+        UIManager:show(require("ui/widget/infomessage"):new{
+            text = tostring(err),
+            timeout = 8,
+        })
+    end
+
+    local function close()
+        if dropdown and not closed then
+            UIManager:close(dropdown)
+        end
+    end
+
+    -- Текст пункта (бывает готовым или считается функцией).
+    local function textOf(item)
+        if item.text_func then
+            local ok, value = pcall(item.text_func)
+            if ok and value ~= nil then return tostring(value) end
+        end
+        return item.text
+    end
+
+    local function goBack()
+        if current.parent then
+            current = current.parent
+            local items = current.items
+            if items.needs_refresh and items.refresh_func then
+                local ok, fresh = pcall(items.refresh_func)
+                if ok and type(fresh) == "table" then current.items = fresh end
+            end
+            rebuild()
+        else
+            close()
+            if current.back then current.back() end
+        end
+    end
+
+    -- Один пункт KOReader -> одна кнопка выпадающего списка.
+    local function buttonFor(item)
+        local button = {
+            text = item.text,
+            text_func = item.text_func and function() return textOf(item) end or nil,
+            enabled = item.enabled ~= false,
+        }
+        if item.enabled_func then
+            button.enabled_func = function()
+                local ok, value = pcall(item.enabled_func)
+                return ok and value and true or false
+            end
+        end
+        if item.checked_func then
+            button.checked_func = function()
+                local ok, value = pcall(item.checked_func)
+                return ok and value and true or false
+            end
+        elseif item.checked ~= nil then
+            button.checked_func = function() return item.checked and true or false end
+        end
+
+        local has_sub = item.sub_item_table ~= nil or item.sub_item_table_func ~= nil
+        button.chevron = has_sub or nil
+
+        button.callback = function()
+            if has_sub then
+                local ok, list = pcall(function()
+                    return item.sub_item_table_func and item.sub_item_table_func() or item.sub_item_table
+                end)
+                if not ok then return fail(list) end
+                if type(list) == "table" and #list > 0 then
+                    current = { title = textOf(item) or "", items = list, parent = current, page = 1 }
+                    rebuild()
+                end
+                return
+            end
+            local callback = item.callback_func and item.callback_func() or item.callback
+            if not callback then return end
+            -- Пункты KOReader ждут «touchmenu_instance»: даём им свой, с теми же методами.
+            local ok, err = pcall(callback, proxy)
+            if not ok then return fail(err) end
+            if item.checked or item.checked_func then
+                if not (item.check_callback_updates_menu or item.check_callback_closes_menu) then
+                    rebuild()
+                end
+            elseif not item.keep_menu_open then
+                close()
+            end
+        end
+
+        -- Долгое нажатие (как в родном меню KOReader). Всё считается только В МОМЕНТ
+        -- долгого нажатия: у некоторых пунктов (например «Custom text») «подсказка» на самом
+        -- деле открывает окно ввода, поэтому заранее её вызывать нельзя.
+        if item.hold_callback or item.hold_callback_func or item.help_text or item.help_text_func then
+            button.hold_callback = function()
+                local ok, err = pcall(function()
+                    local hold = item.hold_callback_func and item.hold_callback_func() or item.hold_callback
+                    if hold then
+                        return hold(proxy, item)
+                    end
+                    local help = item.help_text_func and item.help_text_func(proxy) or item.help_text
+                    if help then
+                        UIManager:show(require("ui/widget/infomessage"):new{ text = help })
+                    end
+                end)
+                if not ok then fail(err) end
+            end
+        end
+        return button
+    end
+
+    -- Делит пункты на страницы, чтобы строки не становились слишком мелкими.
+    local function paginate(items, budget)
+        local pages, page, used = {}, {}, 0
+        for _i, item in ipairs(items) do
+            local cost = U(MENU_ROW_H) + (item.separator and U(MENU_LINE_H) or 0)
+            if #page > 0 and used + cost > budget then
+                table.insert(pages, page)
+                page, used = {}, 0
+            end
+            table.insert(page, item)
+            used = used + cost
+        end
+        if #page > 0 then table.insert(pages, page) end
+        return pages
+    end
+
+    local function buildRows()
+        local items = {}
+        for _i, item in ipairs(current.items) do
+            if type(item) == "table" and (item.text or item.text_func) then
+                table.insert(items, item)
+            end
+        end
+
+        local available = Screen:getHeight() - U(20) - anchor_top - 2 * (U(1.5) + U(6))
+        local fixed = U(MENU_ROW_H) + U(MENU_LINE_H) -- строка «назад» и линия под ней
+        local pages = paginate(items, available - fixed)
+        if #pages > 1 then
+            -- нужна ещё нижняя строка «Страница N из M»
+            pages = paginate(items, available - fixed - U(MENU_LINE_H) - U(MENU_ROW_H))
+        end
+        local page = math.max(1, math.min(current.page or 1, math.max(1, #pages)))
+        current.page = page
+
+        local rows = {}
+        table.insert(rows, { { text = More.backLabel(current.title), callback = goBack } })
+        table.insert(rows, {})
+        for _i, item in ipairs(pages[page] or {}) do
+            table.insert(rows, { buttonFor(item) })
+            if item.separator then table.insert(rows, {}) end
+        end
+        if #pages > 1 then
+            table.insert(rows, {})
+            table.insert(rows, { {
+                text = T(_("Page %1 of %2"), page, #pages),
+                chevron = true,
+                callback = function()
+                    current.page = page % #pages + 1
+                    rebuild()
+                end,
+            } })
+        end
+        return rows
+    end
+
+    -- Перерисовывает список на месте (после нажатия, перехода, смены страницы).
+    rebuild = function()
+        if closed or not dropdown then return end
+        local ok, err = pcall(function()
+            local old = dropdown:region()
+            dropdown.buttons = buildRows()
+            if dropdown.box then dropdown.box:free() end
+            dropdown:init()
+            local region = old:combine(dropdown:region())
+            UIManager:setDirty("all", function()
+                return "ui", region
+            end)
+        end)
+        if not ok then fail(err) end
+    end
+
+    proxy = {
+        ui = ui,
+        item_table = root.items,
+        updateItems = function() rebuild() end,
+        closeMenu = function() close() end,
+    }
+
+    local ok, err = pcall(function()
+        dropdown = Toolbar.Dropdown:new{
+            buttons = buildRows(),
+            anchor_right = Screen:getWidth() - U(8),
+            anchor_top = anchor_top,
+            notch_x = area.x + math.floor(area.w / 2),
+            close_first = false,
+            on_close = function() closed = true end,
+        }
+        UIManager:show(dropdown)
+    end)
+    if not ok then fail(err) end
+end
+
+-- Главное меню «Строка состояния (верх/низ)».
+function More.showProgress(ui, area, panel)
+    local footer = ui.view and ui.view.footer
+
+    -- Если меню почему-то пропало (пересоздание footer после крэша и т.п.) —
+    -- пересобираем его на месте.
+    local koreader_menu = footer and footer._kcui_status_bar_menu
+    if footer and not koreader_menu then
+        local ReaderFooter = require("apps/reader/modules/readerfooter")
+        local menu_items = {}
+        pcall(ReaderFooter.addToMainMenu, footer, menu_items)
+        koreader_menu = footer._kcui_status_bar_menu
+    end
+
+    local alt = footer and footer._kcui_alt_status_bar
+    -- Если альтернативная строка тоже пропала — спрашиваем напрямую.
+    if not alt and ui.crelistener and ui.crelistener.getAltStatusBarMenu then
+        local ok, menu = pcall(ui.crelistener.getAltStatusBarMenu, ui.crelistener)
+        if ok and menu then alt = menu end
+    end
+
+    -- Список остаётся открытым (keep_open), пока вы сами его не закроете,
+    -- поэтому переходы в другие меню закрывают его вручную.
+    local dropdown
+    local function openNext(action)
+        return function()
+            UIManager:close(dropdown)
+            action()
+        end
+    end
+    local function backHere()
+        More.showProgress(ui, area, panel)
+    end
+
+    local rows = {}
+
+    -- Строка «назад»: возвращает в предыдущее меню («три точки»).
+    if panel then
+        table.insert(rows, { {
+            text = More.backLabel(_("Status bar (top & bottom)")),
+            callback = openNext(function() More.show(ui, panel, area) end),
+        } })
+        table.insert(rows, {})
+    end
+
+    if alt and alt.sub_item_table then
+        table.insert(rows, { {
+            text = _("Alternative"),
+            chevron = true,
+            callback = openNext(function()
+                More.showMenu(ui, area, {
+                    title = _("Alternative"),
+                    items = alt.sub_item_table,
+                    back = backHere,
+                })
+            end),
+        } })
+        table.insert(rows, {})
+    end
+
+    table.insert(rows, { {
+        text = _("Use KOReader's status bar"),
+        checked_func = function()
+            return footer ~= nil and not footer.settings.kcui_edges
+        end,
+        enabled_func = function() return footer ~= nil end,
+        callback = function()
+            if not footer then return end
+            footer.settings.kcui_edges = not footer.settings.kcui_edges or nil
+            G_reader_settings:saveSetting("footer", footer.settings)
+            require("kcui/restyle").refreshStatusBar(ui)
+            UIManager:setDirty("all", "ui")
+        end,
+    } })
+    table.insert(rows, {})
+
+    table.insert(rows, { {
+        text = _("Plugin's bar"),
+        chevron = true,
+        callback = openNext(function()
+            More.showPluginProgress(ui, area, backHere)
+        end),
+    } })
+
+    if koreader_menu and koreader_menu.sub_item_table then
+        table.insert(rows, { {
+            text = _("KOReader's bar"),
+            chevron = true,
+            callback = openNext(function()
+                local items = {}
+                local alt_text = alt and alt.text
+                for _i, item in ipairs(koreader_menu.sub_item_table) do
+                    if item ~= alt and (not alt_text or item.text ~= alt_text) then
+                        table.insert(items, item)
+                    end
+                end
+                More.showMenu(ui, area, {
+                    title = _("KOReader's bar"),
+                    items = items,
+                    back = backHere,
+                })
+            end),
+        } })
+    end
+
+    dropdown = More.dropdown(area, rows, true)
 end
 
 function More.resetBook(ui)
@@ -578,7 +960,7 @@ function More.show(ui, panel, area)
         action(_("Reset book"), function() More.resetBook(ui) end),
         {},
     }
-    table.insert(buttons, { { text = _("Bottom of page"), chevron = true, callback = function() More.showProgress(ui, area) end } })
+    table.insert(buttons, { { text = _("Status bar (top & bottom)"), chevron = true, callback = function() More.showProgress(ui, area, panel) end } })
     if Device:hasKeys() then
         table.insert(buttons, action(_("Turn off touchscreen"), More.disableTouch))
     end
@@ -867,6 +1249,7 @@ local Panel = InputContainer:extend{
 function Panel:init()
     local w, h = Screen:getWidth(), Screen:getHeight()
     self.dimen = Geom:new{ x = 0, y = 0, w = w, h = h }
+    self.kcui_drawer = self.kind == "quick"
     if self.kind == "quick" then
         local in_book = self.ui and self.ui.document ~= nil
         self.top = (in_book and TopBar.home or TopBar.expanded)(self.ui, function() return self end)
@@ -878,6 +1261,8 @@ function Panel:init()
         local w = self.dimen.w
         local collections = self.ui and self.ui.collections
         local half = math.floor(U(199.4) * (1 + U.fit()) / 2)
+        local tile_gap, tile_edge = U(8), U(4.5)
+        half = math.min(half, math.floor((2 * (w / 2 - tile_edge) + tile_gap) / 3))
         local shift = top_h - U(80)
         local row1_top, row1_label = U(94) + shift, U(157) + shift
         local row2_top, row2_label = U(201.6) + shift, U(265) + shift
@@ -998,14 +1383,18 @@ function Panel:init()
         self:buildActions()
         self.divider_y = (#rows == 1 and U(308.3) - (row2_top - row1_top) or U(308.3)) + shift
         self.sliders = lightSliders(self.ui)
-        local cy = self.divider_y + U(30.3)
+        local natural = 180.7 + 119.6 * (math.max(#self.sliders, 1) - 1)
+        local room = h - U(6) - self.divider_y
+        local vk = math.max(0.6, math.min(1, room / U(natural)))
+        local function V(units) return U(units * vk) end
+        local cy = self.divider_y + V(30.3)
         local margin = U(32.5)
         local mark = U(16)
         self.slider_margin = margin
         for _i, slider in ipairs(self.sliders) do
             slider.label_cy = cy
-            slider.value_cy = cy + U(29.5)
-            slider.track_cy = slider.value_cy + U(29.9)
+            slider.value_cy = cy + V(29.5)
+            slider.track_cy = slider.value_cy + V(29.9)
             slider.minus_x = margin
             slider.plus_x = w - margin - mark
             slider.x0 = margin + mark + U(21.3)
@@ -1034,10 +1423,10 @@ function Panel:init()
                 slider.schedule_right = w - U(72)
                 slider.chevron_x = w - U(38.3) - slider.schedule_chevron:getSize().w
             end
-            cy = slider.track_cy + U(60.2)
+            cy = slider.track_cy + V(60.2)
         end
         local last = self.sliders[#self.sliders]
-        self.chevron_cy = (last and last.track_cy or self.divider_y) + U(61)
+        self.chevron_cy = (last and last.track_cy or self.divider_y) + V(61)
         self.chevron_w = U(53.7)
         self.chevron = ImageWidget:new{
             original_in_nightmode = false,
@@ -1047,7 +1436,7 @@ function Panel:init()
             alpha = true,
         }
         self.bottom_line = U(4.4)
-        self.panel_h = self.chevron_cy + U(24.6) + self.bottom_line
+        self.panel_h = self.chevron_cy + V(24.6) + self.bottom_line
     else
         local pad = U(21.27)
         local gap = self.top.label_gap + U(6)
@@ -1425,14 +1814,36 @@ function Panel:onCloseWidget()
     end)
 end
 
+function Panel.isDrawerShown()
+    for _i, entry in ipairs(UIManager._window_stack) do
+        if entry.widget.kcui_drawer then return true end
+    end
+    return false
+end
+
 function Panel.showQuick(ui)
     UIManager:show(Panel:new{
         ui = ui,
         kind = "quick",
         on_settings = function()
-            ui.menu:onShowMenu()
+            local menu = ui.menu
+            local real = menu and not ui.document
+            if real then menu._kcui_bypass = true end
+            menu:onShowMenu()
+            if real then menu._kcui_bypass = nil end
         end,
     })
+end
+
+function Panel.openDrawer(ui)
+    ui = ui or require("apps/reader/readerui").instance or require("apps/filemanager/filemanager").instance
+    if not ui or Panel.isDrawerShown() then return true end
+    if ui.document then
+        Panel.showQuick(ui)
+    elseif ui.menu then
+        ui.menu:onShowMenu()
+    end
+    return true
 end
 
 function Panel.install()
@@ -1455,6 +1866,7 @@ function Panel.install()
         if do_not_show or menu._kcui_bypass then
             return orig_fm_show(menu, tab_index, do_not_show)
         end
+        if Panel.isDrawerShown() then return true end
         UIManager:show(Panel:new{
             ui = menu.ui,
             kind = "quick",
@@ -1465,6 +1877,13 @@ function Panel.install()
             end,
         })
         return true
+    end
+
+    FileManagerMenu.onSwipeShowMenu = function(menu, ges)
+        if ges.direction == "south" then
+            menu:onShowMenu()
+            return true
+        end
     end
 
     local ReaderMenu = require("apps/reader/modules/readermenu")

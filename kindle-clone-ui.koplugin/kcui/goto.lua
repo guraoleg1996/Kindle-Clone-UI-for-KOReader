@@ -10,7 +10,7 @@ local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
 local Toolbar = require("kcui/toolbar")
 local UIManager = require("ui/uimanager")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
 local T = require("ffi/util").template
 local Screen = Device.screen
@@ -169,7 +169,8 @@ function GoTo:init()
     local sw, sh = Screen:getWidth(), Screen:getHeight()
     local margin = U(14)
     self.dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh }
-    self.frame = Geom:new{ x = margin, y = margin, w = sw - 2 * margin, h = sh - 2 * margin }
+    self.x0, self.cw = Common.Column.span(760)
+    self.frame = Geom:new{ x = margin, y = margin, w = self.cw - 2 * margin, h = sh - 2 * margin }
     self.border = U.ceil(1.5)
     self.line = U.ceil(1)
     self.pad = U(14)
@@ -601,7 +602,7 @@ function GoTo:paintTo(bb, x, y)
 end
 
 function GoTo:refresh()
-    UIManager:setDirty(self, function() return "ui", self.frame end)
+    UIManager:setDirty(self, function() return "ui", self:screenFrame() end)
 end
 
 function GoTo:jump(fn)
@@ -696,6 +697,12 @@ function GoTo:onSwipeGoTo(_ev, ges)
     return true
 end
 
+-- The frame in screen coordinates (the widget itself paints in column coordinates).
+function GoTo:screenFrame()
+    local f = self.frame
+    return Geom:new{ x = f.x + (self.x0 or 0), y = f.y, w = f.w, h = f.h }
+end
+
 function GoTo:onNextPage()
     return self:turn(1)
 end
@@ -731,12 +738,19 @@ function GoTo:onCloseWidget()
     if self.empty_highlights then
         self.empty_highlights:free()
     end
-    UIManager:setDirty(nil, function() return "ui", self.frame end)
+    UIManager:setDirty(nil, function() return "ui", self:screenFrame() end)
 end
 
 function GoTo.show(ui)
     UIManager:show(GoTo:new{ ui = ui })
 end
+
+function GoTo:mirrorRect()
+    local f = self.frame
+    return { x = f.x, y = f.y, w = f.w, h = f.h }
+end
+
+Common.Column.install(GoTo, { "onTapGoTo", "onSwipeGoTo" }, true)
 
 local Bookmarks = InputContainer:extend{
     ui = nil,

@@ -4,6 +4,7 @@ local ConfirmBox = require("ui/widget/confirmbox")
 local CreDocument = require("document/credocument")
 local Device = require("device")
 local Event = require("ui/event")
+local Font = require("ui/font")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local ImageWidget = require("ui/widget/imagewidget")
@@ -13,7 +14,7 @@ local InputText = require("ui/widget/inputtext")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local util = require("util")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
 local T = require("ffi/util").template
 local Screen = Device.screen
@@ -255,6 +256,7 @@ local Sheet = InputContainer:extend{
 function Sheet:init()
     local sw, sh = Screen:getWidth(), Screen:getHeight()
     self.dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh }
+    self.x0, self.cw = Common.Column.span()
     self.height = math.min(R(1008), sh)
     self.top = sh - self.height
     self.face = U.face("cfont", BODY_FONT)
@@ -292,6 +294,19 @@ function Sheet:text(text, bold, face, color)
     return widget
 end
 
+-- Text that has to fit a narrow column: it gets a smaller font first (as far as the
+-- language allows) and is cut with an ellipsis only after that.
+function Sheet:fitted(text, face, max_w)
+    local widget = self:text(text, false, face)
+    local natural = widget:getSize().w
+    if natural <= max_w then return widget end
+    widget:free()
+    local k = math.max(require("kcui/i18n").minRatio(), max_w / natural * 0.97)
+    widget = self:text(text, false, Font:getFace(face.orig_font, face.orig_size * k))
+    widget:setMaxWidth(max_w)
+    return widget
+end
+
 function Sheet:themeEntries()
     local current = currentValues(self.ui)
     local entries = { { kind = "custom", name = _("Custom"), values = G_reader_settings:readSetting(CUSTOM) } }
@@ -319,7 +334,7 @@ function Sheet:themeEntries()
 end
 
 function Sheet:buildThemes()
-    local sw = self.dimen.w
+    local sw = self.cw
     local column_w = math.min(R(566), math.floor((sw - R(82) - R(50)) / COLUMNS))
     self.entries, self.selected = self:themeEntries()
     for i, entry in ipairs(self.entries) do
@@ -333,18 +348,27 @@ function Sheet:buildThemes()
         entry.label = self:text(entry.name, current, nil, entry.disabled and Gray.inactive or nil)
         if entry.is_default then
             entry.suffix = self:text(_("- default"), false, self.italic)
-            label_w = label_w - entry.suffix:getSize().w - R(SUFFIX_GAP)
+            if entry.label:getSize().w + R(SUFFIX_GAP) + entry.suffix:getSize().w <= label_w then
+                label_w = label_w - entry.suffix:getSize().w - R(SUFFIX_GAP)
+            else
+                -- a long translation of "- default" does not fit beside the name: it goes on a line of its own
+                entry.suffix_below = true
+                entry.suffix:free()
+                entry.suffix = self:fitted(_("- default"), self.italic, label_w)
+            end
         end
         entry.label:setMaxWidth(label_w)
         if current then
-            entry.note = self:text(_("Current Theme"), false, self.italic)
+            entry.note = self:fitted(_("Current Theme"), self.italic, column_w - R(125))
         end
     end
     self.save_rect = Geom:new{ x = R(63), y = self.dimen.h - R(243), w = sw - 2 * R(63), h = R(95) }
     self.save_color = self.selected.is_default and Gray.inactive or BLACK
     self.save_label = self:text(self.selected.kind == "custom" and _("Save Current Settings") or _("Set Theme as Default"),
         false, nil, self.save_color)
+    self.save_label:setMaxWidth(self.save_rect.w - 2 * R(24))
     self.manage_label = self:text(_("Manage Themes"))
+    self.manage_label:setMaxWidth(sw - 2 * R(63) - R(80))
     self.manage_rect = Geom:new{ x = 0, y = self.dimen.h - R(111), w = sw, h = R(111) }
 end
 
@@ -371,8 +395,8 @@ function Sheet:buildFont()
     self.family_label = self:text(_("Font Family"))
     self.family_sample = self:text("Aa", false, U.face(file or "cfont", SAMPLE_FONT))
     self.family_name = self:text(face, false, U.face(file or "cfont", NAME_FONT))
-    self.family_name:setMaxWidth(self.dimen.w - R(319) - self.family_label:getSize().w - self.family_sample:getSize().w)
-    self.family_rect = Geom:new{ x = 0, y = self.top + R(111), w = self.dimen.w, h = R(165) }
+    self.family_name:setMaxWidth(self.cw - R(319) - self.family_label:getSize().w - self.family_sample:getSize().w)
+    self.family_rect = Geom:new{ x = 0, y = self.top + R(111), w = self.cw, h = R(165) }
     local size = self:slider(_("Size"), self.top + R(527), self.top + R(528), #SIZES, nearest(SIZES, referencePixels(config.font_size)), 37, 46)
     size.number = self:text(tostring(size.level), false, self.number_face)
     size.set = function(level)
@@ -488,30 +512,69 @@ function Sheet:buildLayout()
             { size = wide, lines = rule(3, 22, 18.5, 22, 96), selected = spacing == WIDE, action = spaced(WIDE) },
         } },
     }
-    local lefts = { R(LAYOUT_COLUMNS[1]), R(LAYOUT_COLUMNS[2]) }
-    for _i, group in ipairs(self.groups) do
-        if group.column == 2 then
-            local width = -R(OPTION_GAP)
-            for _j, choice in ipairs(group.options) do
-                width = width + R(choice.size[1]) + R(OPTION_GAP)
+    -- Reference geometry is kept whenever both columns fit; on narrow screens the
+    -- option boxes shrink together (k) and the two columns move closer.
+    local function span(column)
+        local width = 0
+        for _i, group in ipairs(self.groups) do
+            if group.column == column then
+                local total = -OPTION_GAP
+                for _j, choice in ipairs(group.options) do
+                    total = total + choice.size[1] + OPTION_GAP
+                end
+                width = math.max(width, total)
             end
-            lefts[2] = math.min(lefts[2], self.dimen.w - lefts[1] - width)
         end
+        return width
     end
+    local w1, w2 = span(1), span(2)
+    -- the same widths measured the way the reference layout does (sum of rounded boxes)
+    local function pixelSpan(column)
+        local width = 0
+        for _i, group in ipairs(self.groups) do
+            if group.column == column then
+                local total = -R(OPTION_GAP)
+                for _j, choice in ipairs(group.options) do
+                    total = total + R(choice.size[1]) + R(OPTION_GAP)
+                end
+                width = math.max(width, total)
+            end
+        end
+        return width
+    end
+    local k = 1
+    local lefts = { R(LAYOUT_COLUMNS[1]), R(LAYOUT_COLUMNS[2]) }
+    -- Reference behaviour: the second column slides left when the screen is narrower.
+    -- Only when that would make the columns collide do all boxes shrink together.
+    local clamped = math.min(lefts[2], self.cw - lefts[1] - pixelSpan(2))
+    if clamped >= lefts[1] + pixelSpan(1) + R(24) then
+        lefts[2] = clamped
+    else
+        local side, between = R(36), R(40)
+        k = math.max(0.55, math.min(1, (self.cw - 2 * side - between) / (R(w1) + R(w2))))
+        lefts = { side, side + math.floor(R(w1) * k) + between }
+    end
+    self.layout_k = k
+    local function LR(px)
+        return math.floor(R(px) * k + 0.5)
+    end
+    self.LR = LR
     for _i, group in ipairs(self.groups) do
         group.label = self:text(group.title)
+        local column_w = (group.column == 1 and R(w1) * k or self.cw - lefts[2] - lefts[1])
+        group.label:setMaxWidth(math.max(R(60), math.floor(column_w)))
         group.left = lefts[group.column]
         local x = group.left
         for _j, choice in ipairs(group.options) do
-            choice.rect = Geom:new{ x = x, y = self.top + R(group.top), w = R(choice.size[1]), h = R(choice.size[2]) }
-            x = x + choice.rect.w + R(OPTION_GAP)
+            choice.rect = Geom:new{ x = x, y = self.top + R(group.top), w = LR(choice.size[1]), h = LR(choice.size[2]) }
+            x = x + choice.rect.w + LR(OPTION_GAP)
         end
     end
 end
 
 function Sheet:buildList()
     local list = self.list
-    local sw = self.dimen.w
+    local sw = self.cw
     local row_h = R(112)
     local first_y = self.top + R(111)
     list.per_page = math.max(1, math.floor((self.dimen.h - first_y) / row_h))
@@ -532,17 +595,49 @@ function Sheet:buildList()
     end
 end
 
-function Sheet:build()
-    self:release()
-    local x = R(44)
+-- Lays the tab row out. The reference geometry is used whenever it fits the
+-- screen; otherwise gaps and padding shrink first and the font shrinks last, so
+-- long translations and narrow phones never push a tab off the sheet.
+function Sheet:layoutTabs()
+    local sw = self.cw
+    local steps = {
+        { k = 1, gap = R(44), margin = R(44), pad = R(19) },
+        { k = 1, gap = R(22), margin = R(30), pad = R(14) },
+        { k = 0.92, gap = R(16), margin = R(24), pad = R(12) },
+        { k = 0.84, gap = R(12), margin = R(20), pad = R(10) },
+        { k = 0.76, gap = R(8), margin = R(16), pad = R(8) },
+        { k = 0.68, gap = R(6), margin = R(12), pad = R(6) },
+    }
+    local chosen
+    for i, step in ipairs(steps) do
+        local face = step.k == 1 and self.face or U.face("cfont", BODY_FONT * step.k)
+        local widths, total = {}, 2 * step.margin - step.gap
+        for j, label in ipairs(TABS) do
+            local regular = TextWidget:new{ text = label, face = face }
+            widths[j] = regular:getSize().w + 2 * step.pad
+            regular:free()
+            total = total + widths[j] + step.gap
+        end
+        chosen = { step = step, face = face, widths = widths }
+        if total <= sw then break end
+    end
+    local x = chosen.step.margin
     self.tabs = {}
     for i, label in ipairs(TABS) do
-        local regular = TextWidget:new{ text = label, face = self.face }
-        local width = regular:getSize().w + 2 * R(19)
-        regular:free()
-        table.insert(self.tabs, { label = self:text(label, i == self.tab), x = x, w = width })
-        x = x + width + R(44)
+        local width = chosen.widths[i]
+        table.insert(self.tabs, {
+            label = self:text(label, i == self.tab, chosen.face),
+            face = chosen.face,
+            x = x,
+            w = width,
+        })
+        x = x + width + chosen.step.gap
     end
+end
+
+function Sheet:build()
+    self:release()
+    self:layoutTabs()
     if self.list then
         self:buildList()
     elseif self.tab == THEMES_TAB then
@@ -555,7 +650,7 @@ function Sheet:build()
 end
 
 function Sheet:region()
-    return Geom:new{ x = 0, y = self.top, w = self.dimen.w, h = self.height }
+    return Geom:new{ x = self.x0, y = self.top, w = self.cw, h = self.height }
 end
 
 function Sheet:paintIcon(bb, entry)
@@ -581,18 +676,25 @@ function Sheet:paintIcon(bb, entry)
 end
 
 function Sheet:paintThemes(bb)
-    local sw, sh = self.dimen.w, self.dimen.h
+    local sw, sh = self.cw, self.dimen.h
     for _i, entry in ipairs(self.entries) do
         self:paintIcon(bb, entry)
         local label_x = entry.x + R(LABEL_X)
         local center = entry.y + R(38)
-        local label_center = entry.note and center - R(21.5) or center
+        local second = entry.suffix_below and entry.suffix or nil
+        local lines = 1 + (second and 1 or 0) + (entry.note and 1 or 0)
+        local label_center = lines == 3 and center - R(36) or (lines == 2 and center - R(21.5) or center)
         entry.label:paintTo(bb, label_x, capTop(entry.label, self.face, label_center))
-        if entry.suffix then
+        if entry.suffix and not second then
             entry.suffix:paintTo(bb, label_x + entry.label:getSize().w + R(SUFFIX_GAP), capTop(entry.suffix, self.italic, label_center))
         end
+        if second then
+            local second_center = lines == 3 and center or center + R(21.5)
+            second:paintTo(bb, label_x, capTop(second, self.italic, second_center))
+        end
         if entry.note then
-            entry.note:paintTo(bb, label_x, capTop(entry.note, self.italic, center + R(21.5)))
+            local note_center = lines == 3 and center + R(36) or center + R(21.5)
+            entry.note:paintTo(bb, label_x, capTop(entry.note, self.italic, note_center))
         end
     end
     local button = self.save_rect
@@ -629,7 +731,7 @@ function Sheet:paintSlider(bb, slider)
 end
 
 function Sheet:paintFont(bb)
-    local sw, top = self.dimen.w, self.top
+    local sw, top = self.cw, self.top
     self.family_label:paintTo(bb, R(63), capTop(self.family_label, self.face, top + R(205)))
     local chevron = self.chevron:getSize()
     local right = sw - R(100)
@@ -648,17 +750,18 @@ function Sheet:paintFont(bb)
 end
 
 function Sheet:paintLayout(bb)
+    local LR = self.LR
     for _i, group in ipairs(self.groups) do
         group.label:paintTo(bb, group.left, capTop(group.label, self.face, self.top + R(group.center)))
         for _j, choice in ipairs(group.options) do
             local rect = choice.rect
             if choice.selected then
-                frame(bb, rect, R(5), R(10))
+                frame(bb, rect, math.max(2, LR(5)), LR(10))
             else
-                frame(bb, rect, R(2), R(8))
+                frame(bb, rect, math.max(1, LR(2)), LR(8))
             end
             for _k, line in ipairs(choice.lines) do
-                bb:paintRect(rect.x + R(line.x), rect.y + R(line.y), R(line.w), math.max(1, R(2)), BLACK)
+                bb:paintRect(rect.x + LR(line.x), rect.y + LR(line.y), LR(line.w), math.max(1, LR(2)), BLACK)
             end
         end
     end
@@ -666,7 +769,7 @@ end
 
 function Sheet:paintList(bb)
     local list = self.list
-    local sw = self.dimen.w
+    local sw = self.cw
     if #list.items == 0 and list.empty_label then
         list.empty_label:paintTo(bb, R(63), capTop(list.empty_label, self.face, self.top + R(171)))
         return
@@ -694,7 +797,7 @@ function Sheet:paintList(bb)
 end
 
 function Sheet:paintTo(bb)
-    local sw = self.dimen.w
+    local sw = self.cw
     local top = self.top
     bb:paintRect(0, top, sw, self.height, WHITE)
     bb:paintRect(0, top, sw, R(5), BLACK)
@@ -705,7 +808,7 @@ function Sheet:paintTo(bb)
     else
         for i, tab in ipairs(self.tabs) do
             local size = tab.label:getSize()
-            tab.label:paintTo(bb, tab.x + math.floor((tab.w - size.w) / 2), capTop(tab.label, self.face, top + R(56)))
+            tab.label:paintTo(bb, tab.x + math.floor((tab.w - size.w) / 2), capTop(tab.label, tab.face or self.face, top + R(56)))
             if i == self.tab then
                 bb:paintRect(tab.x, top + R(97), tab.w, R(10), BLACK)
             end
@@ -824,7 +927,7 @@ function Sheet:tapList(pos)
     for _i, row in ipairs(list.rows) do
         if row.rect:contains(pos) then
             if list.on_delete then
-                if pos.x >= self.dimen.w - R(160) then
+                if pos.x >= self.cw - R(160) then
                     list.on_delete(row.item)
                 end
             elseif list.on_tap then
@@ -991,6 +1094,13 @@ function Sheet:onCloseWidget()
     end
     UIManager:setDirty(nil, "ui", self:region())
 end
+
+-- The part of the screen the sheet owns (in column coordinates), used for mirroring.
+function Sheet:mirrorRect()
+    return { x = 0, y = self.top, w = self.cw, h = self.height }
+end
+
+Common.Column.install(Sheet, { "onTapSheet", "onSwipeSheet" }, true)
 
 local NameSheet = InputContainer:extend{
     ui = nil,

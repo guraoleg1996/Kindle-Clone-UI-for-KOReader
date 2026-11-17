@@ -13,7 +13,7 @@ local filemanagerutil = require("apps/filemanager/filemanagerutil")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local sha2 = require("ffi/sha2")
-local C_ = require("gettext").pgettext
+local C_ = require("kcui/i18n").pgettext
 local Device = require("device")
 local Screen = Device.screen
 
@@ -22,10 +22,51 @@ local ROOT = debug.getinfo(1, "S").source:match("^@(.*)/kcui/common%.lua$")
 local REFERENCE_SCALE = math.ceil(1264 / 600 * 10000) / 10000
 local REFERENCE_DPI = 300
 
+-- The layout is designed on a canvas whose short side is about 600 units wide
+-- (a Kindle in portrait). Real screens are clamped so that the short side stays
+-- between MIN_SHORT and MAX_SHORT units: phones get a slightly smaller UI so
+-- nothing is cramped, big monitors get a bigger UI instead of a tiny one.
+local MIN_SHORT = 400
+-- In landscape a phone only has a few hundred units of height, so allow a
+-- somewhat smaller UI there to keep more than two list rows on screen.
+local MIN_SHORT_LANDSCAPE = 460
+local MAX_SHORT = 640
+
 local Units = {}
 
+local cache_key, cache_scale
+
+-- A page whose content is taller than a short screen can build and paint itself
+-- at a reduced size: while `override` is set, every unit gets smaller by that factor.
+local override = 1
+
 local function scale()
-    return Screen:getDPI() * REFERENCE_SCALE / REFERENCE_DPI
+    local dpi, w, h = Screen:getDPI(), Screen:getWidth(), Screen:getHeight()
+    local key = dpi * 1e8 + w * 1e4 + h + override * 1e-3
+    if key == cache_key then return cache_scale end
+    local short = math.min(w, h)
+    local physical = dpi * REFERENCE_SCALE / REFERENCE_DPI
+    local min_short = w > h and MIN_SHORT_LANDSCAPE or MIN_SHORT
+    local result = math.max(short / MAX_SHORT, math.min(physical, short / min_short)) * override
+    cache_key, cache_scale = key, result
+    return result
+end
+
+local function restored(previous, ok, ...)
+    override = previous
+    if not ok then error((...), 0) end
+    return ...
+end
+
+-- Runs fn(...) with all units multiplied by `factor` (restored afterwards, even on errors).
+function Units.withScale(factor, fn, ...)
+    local previous = override
+    override = factor
+    return restored(previous, pcall(fn, ...))
+end
+
+function Units.scale()
+    return scale()
 end
 
 function Units.ceil(units)
@@ -38,6 +79,62 @@ end
 
 function Units.fit()
     return math.min(1, Screen:getWidth() / math.floor(600 * scale() + 0.5))
+end
+
+-- Single-line text that always fits `max_width`: the font shrinks down to
+-- `min_ratio` of its size first, and only then is the text cut with an ellipsis.
+-- opts: text, size (units), name (font, default "cfont"), bold, fgcolor, max_width, min_ratio
+function Units.fitText(opts)
+    local TextWidget = require("ui/widget/textwidget")
+    local name = opts.name or "cfont"
+    local function make(size, max_width)
+        return TextWidget:new{
+            text = opts.text,
+            face = Units.face(name, size),
+            bold = opts.bold,
+            fgcolor = opts.fgcolor,
+            max_width = max_width,
+        }
+    end
+    local widget = make(opts.size)
+    local max_w = opts.max_width
+    if not max_w then return widget end
+    local natural = widget:getSize().w
+    if natural <= max_w then return widget end
+    widget:free()
+    local size = math.max(opts.size * (opts.min_ratio or require("kcui/i18n").minRatio()), opts.size * max_w / natural * 0.97)
+    return make(size, max_w)
+end
+
+-- Width of `text` in a face, used to pick one common font size for a row of labels.
+function Units.textWidth(text, name, size, bold)
+    local TextWidget = require("ui/widget/textwidget")
+    local widget = TextWidget:new{ text = text, face = Units.face(name or "cfont", size), bold = bold }
+    local w = widget:getSize().w
+    widget:free()
+    return w
+end
+
+-- Width / height of the current screen measured in layout units.
+function Units.canvas()
+    local k = scale()
+    return Screen:getWidth() / k, Screen:getHeight() / k
+end
+
+-- Short canvases (landscape phones) get proportionally lower list rows so that
+-- more than two of them fit; every normal screen keeps the reference height.
+function Units.rowScale()
+    local _, h = Units.canvas()
+    return math.max(0.7, math.min(1, h / 560))
+end
+
+-- "compact" = phone-like portrait canvas, "wide" = landscape / desktop canvas.
+function Units.compact()
+    return (Screen:getWidth() / scale()) < 520
+end
+
+function Units.wide()
+    return (Screen:getWidth() / scale()) > 760
 end
 
 setmetatable(Units, {
@@ -221,8 +318,10 @@ end
 
 local Dates = {}
 
-function Dates.day(seconds)
-    return os.date("%b ", seconds) .. tonumber(os.date("%d", seconds)) .. os.date(", %Y", seconds)
+-- A date in the current interface language: abbreviated month by default
+-- ("Nov 11, 2026"), the full month name when `full` is true.
+function Dates.day(seconds, full)
+    return require("kcui/i18n").date(seconds, not full)
 end
 
 function Dates.time(seconds)
@@ -469,7 +568,142 @@ function State.saveApplied(applied)
     writeState((statePaths()), applied)
 end
 
+-- Right-to-left languages. The overlays below are painted by hand, so KOReader
+-- cannot mirror them on its own: the layout is drawn left-to-right into a spare
+-- buffer, the buffer is flipped, and then the texts and ordinary icons are
+-- painted again, unflipped, at their mirrored places (so no letter is reversed).
+local Mirror = {}
+
+local TextWidget = require("ui/widget/textwidget")
+local TextBoxWidget = require("ui/widget/textboxwidget")
+local ImageWidget = require("ui/widget/imagewidget")
+
+function Mirror.active()
+    local ok, BD = pcall(require, "ui/bidi")
+    return ok and BD.mirroredUILayout() or false
+end
+
+-- Arrows and chevrons must point the other way in a mirrored layout, so they are
+-- flipped together with it; every other icon keeps its own orientation.
+local function flipsWithLayout(widget)
+    local file = widget.file
+    return type(file) == "string" and (file:find("chevron", 1, true) or file:find("arrow", 1, true)) ~= nil
+end
+
+-- `rect` ({x, y, w, h} in the coordinates of `bb`) is the area the overlay owns; only
+-- it is mirrored, so whatever lies around it (the book page) stays untouched.
+function Mirror.paint(bb, paint, rect)
+    local w, h = bb:getWidth(), bb:getHeight()
+    local rx, ry = rect and rect.x or 0, rect and rect.y or 0
+    local rw, rh = rect and rect.w or w, rect and rect.h or h
+    rx, ry = math.max(0, rx), math.max(0, ry)
+    rw, rh = math.min(rw, w - rx), math.min(rh, h - ry)
+    local off = Blitbuffer.new(w, h, bb:getType())
+    off:blitFrom(bb, 0, 0, 0, 0, w, h)
+    local recorded = {}
+    local original = {
+        text = TextWidget.paintTo,
+        box = TextBoxWidget.paintTo,
+        image = ImageWidget.paintTo,
+    }
+    local function recording(paint_original, always)
+        return function(widget, target, x, y)
+            if target == off and (always or not flipsWithLayout(widget)) then
+                table.insert(recorded, { widget = widget, x = x, y = y, paint = paint_original })
+                return
+            end
+            return paint_original(widget, target, x, y)
+        end
+    end
+    TextWidget.paintTo = recording(original.text, true)
+    TextBoxWidget.paintTo = recording(original.box, true)
+    ImageWidget.paintTo = recording(original.image, false)
+    local ok, err = pcall(paint, off)
+    TextWidget.paintTo, TextBoxWidget.paintTo, ImageWidget.paintTo = original.text, original.box, original.image
+    if not ok then
+        off:free()
+        error(err, 0)
+    end
+    local copy = Blitbuffer.new(rw, rh, bb:getType())
+    copy:blitFrom(off, 0, 0, rx, ry, rw, rh)
+    for x = 0, rw - 1 do
+        bb:blitFrom(copy, rx + rw - 1 - x, ry, x, 0, 1, rh)
+    end
+    copy:free()
+    off:free()
+    for _i, item in ipairs(recorded) do
+        local size = item.widget:getSize()
+        item.paint(item.widget, bb, rx + rw - (item.x - rx) - size.w, item.y)
+    end
+end
+
+-- Overlays (Aa sheet, Go To, ...) keep a comfortable maximum width on wide
+-- screens and are centred, instead of being stretched over a whole monitor.
+local Column = {}
+
+local COLUMN_MAX_UNITS = 800
+
+-- x offset and width of the centred column for the current screen.
+function Column.span(max_units)
+    local sw = Screen:getWidth()
+    local cw = math.min(sw, Units(max_units or COLUMN_MAX_UNITS))
+    return math.floor((sw - cw) / 2), cw
+end
+
+local function shifted(self, ges, mirror)
+    local x0, cw = self.x0 or 0, self.cw
+    local flip = mirror and Mirror.active()
+    if not (ges and ges.pos) or (x0 <= 0 and not flip) then return ges end
+    local copy = {}
+    for k, v in pairs(ges) do copy[k] = v end
+    local pos = ges.pos
+    local outside = pos.x < x0 or pos.x >= x0 + cw
+    copy.pos = pos:copy()
+    copy.pos.x = pos.x - x0
+    if flip then
+        local rect = self.mirrorRect and self:mirrorRect()
+        local rx, rw = rect and rect.x or 0, rect and rect.w or cw
+        copy.pos.x = rx + rw - 1 - (copy.pos.x - rx)
+    end
+    if outside then
+        -- a tap beside the column counts as a tap outside the overlay
+        copy.pos.x = -1
+        copy.pos.y = -1
+    end
+    return copy
+end
+
+-- Makes `class` paint into the centred column and shifts its gestures into the
+-- column's own coordinate system. `self.x0` / `self.cw` are set by the widget.
+-- With `mirror`, right-to-left languages get a mirrored overlay.
+function Column.install(class, handlers, mirror)
+    local paint = class.paintTo
+    class.paintTo = function(self, bb, x, y)
+        local x0 = self.x0 or 0
+        -- The view is one pixel wider than the column: KOReader's blitbuffer fills a
+        -- rectangle that is exactly as wide as its buffer in one go, ignoring the row
+        -- stride of a view, and that would spill into the neighbouring rows.
+        local target = x0 > 0 and bb:viewport(x0, 0, math.min(self.cw + 1, bb:getWidth() - x0), bb:getHeight()) or bb
+        local px, py = x0 > 0 and 0 or x, x0 > 0 and 0 or y
+        if mirror and Mirror.active() then
+            local rect = self.mirrorRect and self:mirrorRect()
+            return Mirror.paint(target, function(off) return paint(self, off, px, py) end, rect)
+        end
+        return paint(self, target, px, py)
+    end
+    for _i, name in ipairs(handlers) do
+        local handler = class[name]
+        if handler then
+            class[name] = function(self, ev, ges)
+                return handler(self, ev, shifted(self, ges, mirror))
+            end
+        end
+    end
+end
+
 return {
+    Column = Column,
+    Mirror = Mirror,
     State = State,
     U = Units,
     Paint = Paint,

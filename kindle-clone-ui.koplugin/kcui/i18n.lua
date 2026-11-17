@@ -1,0 +1,117 @@
+-- Self-contained localization for Kindle Clone UI.
+--
+-- Every text of the plugin is translated by its own catalogs in kcui/l10n/<language>.lua
+-- (one file per KOReader interface language), so the plugin looks right even when
+-- KOReader's own translation files do not know its strings. Whatever a catalog does
+-- not contain falls back to KOReader's gettext and finally to the English original.
+--
+-- Besides the texts, a catalog carries the data needed to write a date in that
+-- language: __months (full names, in the form used inside a date), __months_short
+-- and __date / __date_short (patterns with {d} {month} {Y} placeholders).
+
+local gettext = require("gettext")
+
+local I18n = {}
+
+local catalogs = {}   -- language code -> catalog table (false when there is none)
+
+-- Catalogs are read by path, so this module also works where the plugin folder
+-- is not on package.path yet (for example while KOReader reads _meta.lua).
+local ROOT = debug.getinfo(1, "S").source:match("^@(.*)/kcui/i18n%.lua$")
+
+local function load(code)
+    if catalogs[code] ~= nil then return catalogs[code] end
+    local ok, catalog
+    if ROOT then
+        ok, catalog = pcall(dofile, ROOT .. "/kcui/l10n/" .. code .. ".lua")
+    else
+        ok, catalog = pcall(require, "kcui/l10n/" .. code)
+    end
+    catalogs[code] = ok and type(catalog) == "table" and catalog or false
+    return catalogs[code]
+end
+
+-- The code of the language KOReader currently uses ("C" is English).
+function I18n.lang()
+    return gettext.current_lang or "C"
+end
+
+-- Catalog of the current language; "ru_RU" also tries "ru".
+local function catalog()
+    local code = I18n.lang()
+    if code == "C" or code == "en" then return nil end
+    return load(code) or load(code:match("^(%a+)_") or code) or nil
+end
+
+local function translate(ctx, msgid)
+    local cat = catalog()
+    if cat then
+        local key = ctx and (ctx .. "\004" .. msgid) or msgid
+        local text = cat[key]
+        if text and text ~= "" then return text end
+    end
+    if ctx then return gettext.pgettext(ctx, msgid) end
+    return gettext(msgid)
+end
+
+-- Plural texts. A catalog lists the forms of a text in __plurals[singular]; with a
+-- single form that form is used for every number (e.g. "Items: %1"), otherwise the
+-- form is picked with KOReader's plural rule of the current language.
+local function plural(msgid, msgid_plural, n)
+    local cat = catalog()
+    local forms = cat and cat.__plurals and cat.__plurals[msgid]
+    if forms and #forms > 0 then
+        local index = #forms == 1 and 1 or ((gettext.getPlural(n) or 0) + 1)
+        local text = forms[index] or forms[#forms]
+        if text and text ~= "" then return text end
+    end
+    return gettext.ngettext(msgid, msgid_plural, n)
+end
+
+I18n.gettext = setmetatable({
+    pgettext = function(ctx, msgid) return translate(ctx, msgid) end,
+    ngettext = plural,
+}, {
+    __call = function(_self, msgid) return translate(nil, msgid) end,
+})
+
+function I18n.pgettext(ctx, msgid)
+    return translate(ctx, msgid)
+end
+
+-- Languages written right to left (the interface is mirrored for them).
+function I18n.rtl()
+    local ok, BD = pcall(require, "ui/bidi")
+    return ok and BD.mirroredUILayout() or false
+end
+
+-- Scripts that stay readable only at larger sizes: text in them may shrink less.
+local SMALLEST_RATIO = {
+    ja = 0.86, zh_CN = 0.86, zh_TW = 0.86, ko_KR = 0.86,
+    ar = 0.82, fa = 0.82, he = 0.84, hi = 0.84, ka = 0.84, el = 0.8,
+}
+
+-- How far a single line of text may shrink (fraction of its normal size) before
+-- it is shortened with an ellipsis or wrapped instead.
+function I18n.minRatio()
+    return SMALLEST_RATIO[I18n.lang()] or SMALLEST_RATIO[(I18n.lang():match("^(%a+)_") or "")] or 0.72
+end
+
+-- English fallbacks for dates.
+local EN_MONTHS = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" }
+local EN_SHORT = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+
+-- "November 11, 2026" in the current language; short = abbreviated month.
+function I18n.date(seconds, short)
+    local t = os.date("*t", seconds)
+    local cat = catalog()
+    local months = cat and (short and cat.__months_short or cat.__months) or (short and EN_SHORT or EN_MONTHS)
+    local pattern = cat and (short and cat.__date_short or cat.__date) or "{month} {d}, {Y}"
+    local text = pattern
+        :gsub("{month}", function() return months[t.month] end)
+        :gsub("{d}", function() return tostring(t.day) end)
+        :gsub("{Y}", function() return tostring(t.year) end)
+    return text
+end
+
+return I18n

@@ -20,7 +20,7 @@ local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local Widget = require("ui/widget/widget")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local CenterContainer = require("ui/widget/container/centercontainer")
 local DocumentRegistry = require("document/documentregistry")
 local Epub = require("kcui/epub")
@@ -65,6 +65,7 @@ local DETAILS_VERSION = 2
 local PRELOADED = "preloaded_home"
 local VIEW = "kcui_library_view"
 local GROUP_SERIES = "kcui_group_series"
+local SHOW_EXTENSIONS = "kcui_show_extensions"
 local GRID = "grid"
 local LIST = "list"
 local GRID_COLUMNS = 3
@@ -90,8 +91,9 @@ local Library = {
     LIST = LIST,
     Books = Books,
     SORTS = {
-        { id = "kcui_title", text = _("Title") },
-        { id = "kcui_author", text = _("Author (surname)") },
+        { id = "kcui_title",    text = _("Book title") },
+        { id = "kcui_author",   text = _("Author") },
+        { id = "kcui_filename", text = _("File name") },
     },
 }
 
@@ -601,61 +603,17 @@ local function titleKey(title)
     return key
 end
 
-local function toSet(words)
-    local set = {}
-    for _i, word in ipairs(words) do
-        set[word] = true
-        set[word .. "."] = true
-    end
-    return set
-end
-
-local PREFIXES = toSet{ "mr", "mrs", "ms", "dr", "prof", "sir", "dame", "rev" }
-local SUFFIXES = toSet{ "jr", "sr", "junior", "senior", "i", "ii", "iii", "iv", "phd", "ph.d", "md", "m.d", "esq" }
-local COPYWORDS = toSet{
-    "agency", "corporation", "company", "co", "council", "committee", "inc", "institute", "national", "society",
-    "club", "team", "software", "games", "entertainment", "media", "studios", "press", "publishing", "staff",
-    "anonymous", "various",
-}
-local PARTICLES = toSet{
-    "da", "das", "de", "del", "della", "den", "der", "di", "do", "dos", "du", "la", "le", "st", "ten", "ter",
-    "van", "von", "bin", "ibn",
-}
-
-local function surnameFirst(author)
-    local name = author:gsub("%b()", ""):gsub("%b[]", ""):match("^%s*(.-)%s*$")
-    if name:find(",") then
-        local head, tail = name:match("^(.*),%s*(%S+)$")
-        if not (tail and SUFFIXES[tail:lower()]) then return name end
-        if head:find(",") then return head .. " " .. tail end
-        name = head .. " " .. tail
-    end
-    local tokens, lower = {}, {}
-    for word in name:gmatch("%S+") do
-        table.insert(tokens, word)
-        lower[#tokens] = word:lower()
-        if COPYWORDS[lower[#tokens]] then return name end
-    end
-    if #tokens < 2 then return tokens[1] end
-    local first, last = 1, #tokens
-    while first < last and PREFIXES[lower[first]] do first = first + 1 end
-    while last > first and SUFFIXES[lower[last]] do last = last - 1 end
-    local start = last
-    while start - 1 > first and PARTICLES[lower[start - 1]] do start = start - 1 end
-    local key = table.concat(tokens, " ", start, last)
-    if start > first then key = key .. ", " .. table.concat(tokens, " ", first, start - 1) end
-    if last < #tokens then key = key .. " " .. table.concat(tokens, " ", last + 1) end
-    return key
-end
-
-local function authorKey(author)
-    local key = author and surnameFirst(author)
-    return key and key:lower() or nil
-end
-
 local function setKeys(item, details)
-    item.kcui_title = titleKey(details.title or item.text:gsub("%.[^.]+$", ""))
-    item.kcui_author = authorKey(details.first_author)
+    local stem = (item.text or ""):gsub("%.[^.]+$", "")
+    item.kcui_title = titleKey(details.title or stem)
+    -- Сортировка по автору идёт по полному имени автора (как указано в
+    -- метаданных), а не только по фамилии.
+    item.kcui_author = details.authors and details.authors ~= ""
+        and details.authors:lower() or nil
+    -- Реальное имя файла — используется в режиме «File name».
+    local file = item.path or item.file
+    local name = file and file:match("[^/]+$")
+    item.kcui_filename = name and name:lower() or nil
 end
 
 local function readPending()
@@ -750,8 +708,10 @@ hasMatchingBookIn = hasMatchingBook
 
 local Series = {}
 
+-- Отображение по сериям отключено: книги идут в том порядке, в котором
+-- их возвращает сам файловый менеджер.
 function Library.groupsSeries()
-    return G_reader_settings:nilOrTrue(GROUP_SERIES)
+    return false
 end
 
 function Library.inSeries(chooser)
@@ -1363,14 +1323,72 @@ local function placeholder(title, w, h, bg)
     }
 end
 
-local function bookTitle(entry, cached)
-    local title = cached and cached.title or entry.text:gsub("%.[^.]+$", "")
-    local file = entry.file or entry.path
-    local ext = file and isDocument(file) and file:match("%.([^./]+)$")
-    if ext and title:sub(-#ext - 1):lower() ~= "." .. ext:lower() then
-        return title .. "." .. ext
+-- Включён ли переключатель «Show file extensions».
+local function showAllExtensions()
+    return G_reader_settings:isTrue(SHOW_EXTENSIONS)
+end
+
+-- Базовое отображаемое название без расширения, общее для поиска дублей
+-- и для отрисовки строки.
+local function baseTitle(entry, cached)
+    -- В режиме «File name» — всегда имя файла, метаданные не используются.
+    if G_reader_settings:readSetting("collate") == "kcui_filename" then
+        local file = entry.file or entry.path
+        local name = file and file:match("[^/]+$") or entry.text or ""
+        return name:gsub("%.[^.]+$", "")
+    end
+    -- В остальных режимах — название из метаданных (или имя файла, если
+    -- метаданных нет).
+    local title = cached and cached.title
+    if not title or title == "" then
+        title = (entry.text or ""):gsub("%.[^.]+$", "")
     end
     return title
+end
+
+-- Итоговое название для показа. Расширение добавляется, если:
+--   * включён переключатель «Show file extensions» (тогда у всех книг подряд), или
+--   * в этой папке есть ещё книга с таким же названием (dup[entry] == true).
+local function bookTitle(entry, cached, dup)
+    local stem = baseTitle(entry, cached)
+    local file = entry.file or entry.path
+    local ext = file and file:match("%.([^./]+)$")
+    if ext and stem:sub(-#ext - 1):lower() ~= "." .. ext:lower() then
+        if showAllExtensions() or (dup and dup[entry]) then
+            return stem .. "." .. ext
+        end
+    end
+    return stem
+end
+
+-- Группирует элементы текущей страницы по их отображаемому названию
+-- (в соответствии с текущим режимом сортировки). Возвращает таблицу
+-- { [item] = true } для тех, чьё название совпадает хотя бы с одной
+-- другой книгой в этой папке.
+local function computeDuplicates(menu)
+    -- Если включён переключатель «Show file extensions», расширения
+    -- показываются у всех книг и искать дубли незачем.
+    if showAllExtensions() then return nil end
+    local groups = {}
+    for _i, item in ipairs(menu.item_table) do
+        if item.is_file then
+            local file = item.file or item.path
+            local cached = Books.get(file)
+            local key = baseTitle(item, cached):lower()
+            groups[key] = groups[key] or {}
+            table.insert(groups[key], item)
+        end
+    end
+    local dup
+    for _key, group in pairs(groups) do
+        if #group > 1 then
+            dup = dup or {}
+            for _i, item in ipairs(group) do
+                dup[item] = true
+            end
+        end
+    end
+    return dup
 end
 
 local function coverImage(file, w, h)
@@ -1461,7 +1479,7 @@ function Row:init()
     elseif is_book then
         local cached = Books.get(self.file)
         self.needs_extract = not deleted and cached == nil
-        title = deleted and entry.text or bookTitle(entry, cached)
+        title = deleted and entry.text or bookTitle(entry, cached, self.menu._kcui_dup)
         authors = deleted and _("Deleted") or cached and cached.authors
         kind = fileType(self.file)
         if deleted then
@@ -1893,7 +1911,7 @@ function Cell:init()
     elseif entry.is_file then
         local cached = Books.get(self.file)
         self.needs_extract = cached == nil
-        self.cover = bookCover(self.file, bookTitle(entry, cached), cached, w, h, WHITE, box_h)
+        self.cover = bookCover(self.file, bookTitle(entry, cached, self.menu._kcui_dup), cached, w, h, WHITE, box_h)
         local percent = readState(self.file)
         self.read = (percent or 0) >= 100
         if percent and percent < 100 then
@@ -2025,15 +2043,23 @@ function Cell:free()
     if self.picked then self.picked:free() end
 end
 
+-- Wider canvases (landscape, tablets, desktop windows) get more columns instead
+-- of a few huge covers; the reference portrait canvas keeps its three.
+local function gridColumns(w)
+    return math.max(GRID_COLUMNS, math.min(8, math.floor(w / U(230) + 0.5)))
+end
+
 local function gridGeometry(w, list_h)
     local pad, gap, top = U(21.27), U(15), U(19)
-    local cell_w = math.floor((w - 2 * pad - (GRID_COLUMNS - 1) * gap) / GRID_COLUMNS)
+    local columns = gridColumns(w)
+    local cell_w = math.floor((w - 2 * pad - (columns - 1) * gap) / columns)
     local rows = math.max(1, math.floor((list_h - top + gap) / (math.floor(cell_w * GRID_ASPECT) + gap) + 0.5))
     return {
         pad = pad,
         gap = gap,
         top = top,
         rows = rows,
+        columns = columns,
         cell_w = cell_w,
         cell_h = math.floor((list_h - top) / rows) - gap,
     }
@@ -2234,15 +2260,15 @@ end
 
 local function updatePageNumbers(menu, band_h)
     local slot = 5
+    menu.page_info[4] = HorizontalSpan:new{ width = 0 }
+    menu.page_info[6] = HorizontalSpan:new{ width = 0 }
+    menu.page_info.align = "top"
+    menu.page_info[10] = VerticalSpan:new{ width = band_h }
     if #menu.item_table == 0 then
         menu.page_info[slot] = menu.page_info_text
     elseif menu.page_num <= 1 then
         menu.page_info[slot] = HorizontalSpan:new{ width = 0 }
     else
-        local first = math.max(1, menu.page - 2)
-        local last = math.min(menu.page_num, first + 4)
-        first = math.max(1, last - 4)
-        local numbers = HorizontalGroup:new{ align = "center" }
         local widest = TextWidget:new{
             text = string.rep("0", math.max(3, #tostring(menu.page_num))),
             face = U.face("cfont", PAGER_FONT),
@@ -2261,33 +2287,42 @@ local function updatePageNumbers(menu, band_h)
         local pad = P(3)
         local arrow_inset = math.floor(P(15) * 6 / 24)
         local reserve_w = math.max(0, dots_w + 2 * space_w - arrow_inset - 3 * pad)
-        local before, after = first > 1, last < menu.page_num
-        local items = {}
-        for page = first, last do
-            table.insert(items, PageNumber:new{
-                page = page, current = page == menu.page, menu = menu, slot_w = slot_w, band_h = band_h,
-            })
+        -- Five page numbers are shown when the row fits the screen; on a narrow
+        -- screen (a phone, many pages) it shows three, or just the current one.
+        local available = Screen:getWidth() - U(10)
+        local count = 5
+        while true do
+            local first = math.max(1, menu.page - math.floor(count / 2))
+            local last = math.min(menu.page_num, first + count - 1)
+            first = math.max(1, last - count + 1)
+            local numbers = HorizontalGroup:new{ align = "center" }
+            local before, after = first > 1, last < menu.page_num
+            local items = {}
+            for page = first, last do
+                table.insert(items, PageNumber:new{
+                    page = page, current = page == menu.page, menu = menu, slot_w = slot_w, band_h = band_h,
+                })
+            end
+            local reserve_before = PageNumber:new{
+                page = before and first - 1 or nil, label = "", menu = menu, slot_w = reserve_w, band_h = band_h,
+                dots = before and "before" or nil, neighbor = items[1], arrow_inset = arrow_inset,
+            }
+            local reserve_after = PageNumber:new{
+                page = after and last + 1 or nil, label = "", menu = menu, slot_w = reserve_w, band_h = band_h,
+                dots = after and "after" or nil, neighbor = items[#items], arrow_inset = arrow_inset,
+            }
+            table.insert(numbers, reserve_before)
+            for _i, item in ipairs(items) do
+                table.insert(numbers, item)
+            end
+            table.insert(numbers, reserve_after)
+            menu.page_info[slot] = numbers
+            linkArrows(menu, reserve_before, items, reserve_after)
+            menu.page_info:resetLayout()
+            if count <= 1 or menu.page_info:getSize().w <= available then break end
+            count = count - 2
         end
-        local reserve_before = PageNumber:new{
-            page = before and first - 1 or nil, label = "", menu = menu, slot_w = reserve_w, band_h = band_h,
-            dots = before and "before" or nil, neighbor = items[1], arrow_inset = arrow_inset,
-        }
-        local reserve_after = PageNumber:new{
-            page = after and last + 1 or nil, label = "", menu = menu, slot_w = reserve_w, band_h = band_h,
-            dots = after and "after" or nil, neighbor = items[#items], arrow_inset = arrow_inset,
-        }
-        table.insert(numbers, reserve_before)
-        for _i, item in ipairs(items) do
-            table.insert(numbers, item)
-        end
-        table.insert(numbers, reserve_after)
-        menu.page_info[slot] = numbers
-        linkArrows(menu, reserve_before, items, reserve_after)
     end
-    menu.page_info[4] = HorizontalSpan:new{ width = 0 }
-    menu.page_info[6] = HorizontalSpan:new{ width = 0 }
-    menu.page_info.align = "top"
-    menu.page_info[10] = VerticalSpan:new{ width = band_h }
     menu.page_info:resetLayout()
 end
 
@@ -2415,6 +2450,9 @@ local function keepSearchBar(menu)
 end
 
 local function updateItems(menu, select_number, no_recalculate_dimen)
+    -- Дубли отображаемых названий в текущей папке (для добавления расширения
+    -- к одинаковым названиям). Считается один раз на страницу.
+    menu._kcui_dup = computeDuplicates(menu)
     local old_dimen = menu.dimen and menu.dimen:copy()
     menu.layout = {}
     keepSearchBar(menu)
@@ -2466,7 +2504,7 @@ local function updateItems(menu, select_number, no_recalculate_dimen)
                 dimen = Geom:new{ x = 0, y = 0, w = grid.cell_w, h = grid.cell_h },
                 show_parent = menu.show_parent,
             }
-            if i % GRID_COLUMNS == 1 then
+            if i % grid.columns == 1 or grid.columns == 1 then
                 table.insert(lines, HorizontalGroup:new{ align = "top", HorizontalSpan:new{ width = grid.pad } })
                 table.insert(menu.item_group, lines[#lines])
                 table.insert(menu.item_group, VerticalSpan:new{ width = grid.gap })
@@ -2519,8 +2557,9 @@ local function recalculateDimen(menu, no_recalculate_dimen)
     local list_h = available - (hasUp(menu) and U(Rows.UP_ROW_HEIGHT) or 0) - Toolbar.heightFor(menu)
     local row_h = menu._kcui_tab == "history" and Rows.HISTORY_ROW_HEIGHT
         or menu._kcui_tab == "pick" and Rows.PICK_ROW_HEIGHT or Rows.ROW_HEIGHT
-    local perpage = Library.isGrid(menu) and gridGeometry(menu.inner_dimen.w, list_h).rows * GRID_COLUMNS
-        or math.max(1, math.floor(list_h / U(row_h) + 0.5))
+    local grid_now = Library.isGrid(menu) and gridGeometry(menu.inner_dimen.w, list_h)
+    local perpage = grid_now and grid_now.rows * grid_now.columns
+        or math.max(1, math.floor(list_h / (U(row_h) * U.rowScale()) + 0.5))
     if menu.perpage ~= perpage then
         menu.perpage = perpage
         no_recalculate_dimen = false
@@ -2579,10 +2618,21 @@ local function collectionSection(collections, current, choose)
     return { key = "collections", title = _("Collections"), max_lines = COLLECTION_LINES, rows = { chips } }
 end
 
+-- Book status names, translated by the plugin's own catalogs.
+local function statusString(status)
+    if status == "all" then return _("All") end
+    if status == "new" then return _("New") end
+    if status == "reading" then return _("Reading") end
+    if status == "abandoned" then return _("On hold") end
+    if status == "complete" then return _("Finished") end
+    if status == "deleted" then return _("Deleted") end
+    return BookList.getBookStatusString(status)
+end
+
 local function filterLabel(status, collection, collections)
     local parts = {}
     if status then
-        table.insert(parts, BookList.getBookStatusString(status))
+        table.insert(parts, statusString(status))
     end
     if collection then
         table.insert(parts, collections:getCollectionTitle(collection))
@@ -2594,7 +2644,7 @@ local function filterSections(fm)
     local current = FileChooser.show_filter.status
     local function chip(status)
         return {
-            text = BookList.getBookStatusString(status or "all"),
+            text = statusString(status or "all"),
             selected = (current == nil and status == nil) or (current ~= nil and status ~= nil and current[status] == true),
             action = function()
                 FileChooser.show_filter.status = status and { [status] = true } or nil
@@ -2617,7 +2667,7 @@ end
 local function historySections(manager)
     local function chip(status)
         return {
-            text = BookList.getBookStatusString(status),
+            text = statusString(status),
             selected = manager.filter == status,
             action = function()
                 manager.filter = status
@@ -2696,7 +2746,6 @@ local function sortSections(fm)
             action = function() fm:onSetReverseSorting(descending) end,
         }
     end
-    local grouping = Library.groupsSeries()
     local function layout(text, icon, id)
         return {
             text = text,
@@ -2719,13 +2768,13 @@ local function sortSections(fm)
                 layout(_("Grid"), "grid", Library.GRID),
                 layout(_("List"), "list", Library.LIST),
                 {
-                    text = _("Group series"),
-                    icon = "series",
+                    text = _("Show file extensions"),
+                    icon = "document",
                     selected_icon = "toolbar/check-white",
-                    selected = grouping,
+                    selected = showAllExtensions(),
                     toggle = true,
                     action = function()
-                        G_reader_settings:saveSetting(GROUP_SERIES, not grouping)
+                        G_reader_settings:saveSetting(SHOW_EXTENSIONS, not showAllExtensions())
                         fm.file_chooser:refreshPath()
                     end,
                 },

@@ -6,11 +6,12 @@ local GestureRange = require("ui/gesturerange")
 local ImageWidget = require("ui/widget/imagewidget")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
 local Panel = require("kcui/panel")
 local Toolbar = require("kcui/toolbar")
 local UIManager = require("ui/uimanager")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
 local T = require("ffi/util").template
 local Screen = Device.screen
@@ -362,6 +363,7 @@ function WarmthPage:init()
     }
     self.ges_events = {
         TapWarmth = { GestureRange:new{ ges = "tap", range = self.dimen } },
+        SwipeWarmth = { GestureRange:new{ ges = "swipe", range = self.dimen } },
         PanWarmth = { GestureRange:new{ ges = "pan", range = self.dimen } },
         HoldWarmth = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
@@ -371,6 +373,15 @@ function WarmthPage:init()
     self:layout()
 end
 
+-- A swipe down from the top edge opens the drawer here too (like the arrow does).
+function WarmthPage:onSwipeWarmth(_ev, ges)
+    local pos = ges.pos
+    if pos and ges.direction == "south"
+            and pos.y <= math.max(self.top.dimen.h, U(130), math.floor(Screen:getHeight() / 8)) then
+        return Panel.openDrawer(self.ui)
+    end
+end
+
 function WarmthPage:layout()
     local w = self.dimen.w
     local mode = self:mode()
@@ -378,17 +389,28 @@ function WarmthPage:layout()
     local edge, gap = U(22), U(8)
     local y = self.top.dimen.h + self.header.dimen.h + edge
     self.rows = {}
+    local radio_x = self.pad + U(14) + U(12)
     local function radio(key, title)
         local row = { kind = "radio", key = key, y = y, selected = mode == key }
+        local avail = w - radio_x - self.pad
         row.title = TextWidget:new{ text = title, face = self.title_face, bold = true }
+        row.line_h = row.title:getSize().h
+        if row.title:getSize().w > avail then
+            -- long (translated) options wrap onto more lines instead of running off screen
+            row.title:free()
+            row.title = TextBoxWidget:new{ text = title, face = self.title_face, bold = true, width = avail }
+        end
         row.h = row.title:getSize().h + gap
         table.insert(self.rows, row)
         y = y + row.h
     end
     local function setting(key, label, value)
         local row = { kind = "setting", key = key, y = y - math.floor(gap / 2) }
-        row.title = TextWidget:new{ text = label, face = self.title_face }
-        row.value = TextWidget:new{ text = value, face = self.title_face }
+        local tx = self.pad + U(26)
+        local room = w - self.pad - U(8.7) - U(10) - tx
+        row.title = TextWidget:new{ text = label, face = self.title_face, max_width = math.floor(room * 0.6) }
+        local value_room = room - row.title:getSize().w - U(8)
+        row.value = TextWidget:new{ text = value, face = self.title_face, max_width = math.max(U(40), value_room) }
         row.h = row.title:getSize().h + gap
         table.insert(self.rows, row)
         y = y + row.h
@@ -508,6 +530,7 @@ function WarmthPage:layout()
         slider.sep_y = slider.track_cy + U(30.5)
         y = slider.sep_y + Divider.height + 4 + U(11.5)
     end
+    self.content_bottom = y
 end
 
 function WarmthPage:paintTo(bb, x, y)
@@ -521,7 +544,7 @@ function WarmthPage:paintTo(bb, x, y)
         if row.kind == "radio" then
             local d = U(14)
             local cx = self.pad
-            local cy = row.y + math.floor(row.title:getSize().h / 2)
+            local cy = row.y + math.floor((row.line_h or row.title:getSize().h) / 2)
             bb:paintRoundedRect(cx, cy - math.floor(d / 2), d, d, black, math.floor(d / 2))
             local ring = U(1.12)
             bb:paintRoundedRect(cx + ring, cy - math.floor(d / 2) + ring, d - 2 * ring, d - 2 * ring, Blitbuffer.COLOR_WHITE, math.floor(d / 2) - ring)
@@ -859,6 +882,28 @@ function WarmthPage:onCloseWidget()
     Cities.release()
     if self.top.onCloseWidget then self.top:onCloseWidget() end
     UIManager:setDirty("all", "ui")
+end
+
+-- On short screens (landscape phones, desktop windows) the page would not fit: it is
+-- then built and painted at a reduced size so that all of it stays reachable.
+local build_page = WarmthPage.init
+function WarmthPage:init()
+    self.scale_k = 1
+    build_page(self)
+    local h = Screen:getHeight()
+    if self.content_bottom and self.content_bottom > h - U(4) then
+        local k = math.max(0.6, (h - U(4)) / self.content_bottom)
+        self.scale_k = k
+        U.withScale(k, build_page, self)
+    end
+end
+
+for _i, name in ipairs{ "layout", "paintTo", "onTapWarmth", "onPanWarmth", "onHoldWarmth" } do
+    local method = WarmthPage[name]
+    WarmthPage[name] = function(self, ...)
+        if (self.scale_k or 1) == 1 then return method(self, ...) end
+        return U.withScale(self.scale_k, method, self, ...)
+    end
 end
 
 function WarmthPage.installSchedule(ui)

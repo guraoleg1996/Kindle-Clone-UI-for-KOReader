@@ -16,7 +16,7 @@ local OverlapGroup = require("ui/widget/overlapgroup")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local Widget = require("ui/widget/widget")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local Common = require("kcui/common")
 local T = require("ffi/util").template
 local Screen = Device.screen
@@ -184,12 +184,15 @@ function Dropdown:init()
     local pad_x = U(27)
     local max_w = 0
     local small_face = U.face("cfont", 15)
+    -- Слишком длинный текст обрезаем многоточием, чтобы он не вылезал за рамку.
+    local text_cap = Screen:getWidth() - 2 * U(21.27) - 2 * pad_x - 2 * U(1.5) - U(16) - U(10) - U(40)
     for _i, item in ipairs(items) do
         if not item.separator then
             local compact = item.small or item.heading
             item.widget = TextWidget:new{
                 text = item.text,
                 face = compact and small_face or face,
+                max_width = text_cap,
                 bold = item.heading,
                 fgcolor = item.heading and Gray.secondary
                     or item.enabled and Blitbuffer.COLOR_BLACK or Gray.inactive,
@@ -629,7 +632,6 @@ function Toolbar.new(menu, w)
     local sort = icon("sort.svg", U(24), U(24))
     local glass = icon("search.svg", U(17), U(17))
     local search = icon("search.svg", U(19), U(19))
-    local label = TextWidget:new{ text = _("Search KOReader"), face = U.face("cfont", 18) }
 
     local filter_x = pad
     local sort_x = w - pad - sort:getSize().w
@@ -659,6 +661,8 @@ function Toolbar.new(menu, w)
     pill.overlap_offset = { pill_x, top }
     local glass_x = pill_x + U(28)
     local label_x = glass_x + glass:getSize().w + U(17)
+    -- the hint always fits inside the pill, whatever the screen or the language
+    local label = U.fitText{ text = _("Search KOReader"), size = 18, max_width = pill_x + pill_w - label_x - U(22) }
 
     local layout = OverlapGroup:new{
         dimen = Geom:new{ w = w, h = h },
@@ -678,20 +682,25 @@ function Toolbar.new(menu, w)
     local middle_end = plus_x
     local done_x, all_x, all_w
     if selecting then
-        local all_face = U.face("cfont", 15)
-        local all_text = TextWidget:new{ text = _("Select all"), face = all_face, bold = true }
         local box = U(21.27)
-        local all_row = HorizontalGroup:new{
-            align = "center",
-            all_text,
-            HorizontalSpan:new{ width = U(6) },
-            icon(allSelected(fm, menu) and "circle-checked.svg" or "circle-empty.svg", box, box),
-        }
-        local done = TextWidget:new{ text = _("Done"), face = all_face, bold = true }
-        done_x = plus_x + plus_inset - U(6) - done:getSize().w
+        local all_row, done
+        -- "Select all" and "Done" shrink until they fit between the filter icon and the check mark
+        local left_limit = filter_x + filter:getSize().w + U(14)
+        for _i, size in ipairs{ 15, 13.5, 12, 10.5, 9.5 } do
+            local all_face = U.face("cfont", size)
+            all_row = HorizontalGroup:new{
+                align = "center",
+                TextWidget:new{ text = _("Select all"), face = all_face, bold = true },
+                HorizontalSpan:new{ width = U(6) },
+                icon(allSelected(fm, menu) and "circle-checked.svg" or "circle-empty.svg", box, box),
+            }
+            done = TextWidget:new{ text = _("Done"), face = all_face, bold = true }
+            done_x = plus_x + plus_inset - U(6) - done:getSize().w
+            all_w = all_row:getSize().w
+            all_x = done_x - U(24) - all_w
+            if all_x >= left_limit then break end
+        end
         table.insert(layout, place(done, done_x))
-        all_w = all_row:getSize().w
-        all_x = done_x - U(24) - all_w
         table.insert(layout, place(all_row, all_x))
         table.insert(layout, place(icon("close.svg", close_size, close_size), close_x))
     elseif in_folder then
@@ -948,17 +957,22 @@ function Toolbar.titleHeader(w, title, count, on_back, on_plus, on_more)
     local more_x = w - pad - more_size + more_inset
     local plus_right = on_more and (more_x + more_inset - U(28.5)) or (w - pad)
     local plus_x = plus_right - plus_size + plus_inset
-    local label = TextWidget:new{
-        text = count and count > 0 and T(_.ngettext("(%1 item)", "(%1 items)", count), count) or "",
-        face = U.face("cfont", 15),
-        fgcolor = Gray.secondary,
-    }
+    local function countLabel(text)
+        return TextWidget:new{ text = text, face = U.face("cfont", 15), fgcolor = Gray.secondary }
+    end
+    local label = countLabel(count and count > 0 and T(_.ngettext("(%1 item)", "(%1 items)", count), count) or "")
     local arrow_w = on_back and icon + gap or 0
+    local room = plus_x - pad - arrow_w - U(9.5) - U(20)
+    if count and count > 0 and U.textWidth(title, "cfont", 18, true) > room - label:getSize().w then
+        -- the name would be cut: the count shrinks to just the number instead
+        label:free()
+        label = countLabel("(" .. count .. ")")
+    end
     local name = TextWidget:new{
         text = title,
         face = U.face("cfont", 18),
         bold = true,
-        max_width = plus_x - pad - arrow_w - U(9.5) - label:getSize().w - U(20),
+        max_width = room - label:getSize().w,
     }
     local group = HorizontalGroup:new{ align = "center" }
     if on_back then

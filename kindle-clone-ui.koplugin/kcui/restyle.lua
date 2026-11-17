@@ -40,8 +40,12 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local Widget = require("ui/widget/widget")
 local filemanagerutil = require("apps/filemanager/filemanagerutil")
-local _ = require("gettext")
+local _ = require("kcui/i18n").gettext
 local N_ = _.ngettext
+-- Родной перевод KOReader. Им ищем пункты ЕГО меню по тексту: эти тексты обязаны совпадать
+-- с теми, что показывает сам KOReader, а переводы плагина могут отличаться (особенно «Margins: %1»
+-- с неразрывным пробелом во французском и «Medium» в индонезийском).
+local KO_ = require("gettext")
 local T = require("ffi/util").template
 local Common = require("kcui/common")
 local Screen = Device.screen
@@ -579,7 +583,21 @@ local KINDLE_ICONS = {
 local function restyleTabs(menu)
     local bar = menu.bar
     if not (bar and bar.icon_widgets and menu.tab_item_table) then return end
-    local face = U.face("cfont", 11)
+    -- one common label size for the whole tab row: as large as the design (11)
+    -- allows, smaller only when the longest label would not fit its tab
+    local label_size = 11
+    for k, button in ipairs(bar.icon_widgets) do
+        local tab = menu.tab_item_table[k]
+        local title = tab and TITLES[tab.icon]
+        if title then
+            local natural = U.textWidth(title, "cfont", 11, true)
+            local room = button.dimen.w
+            if natural > room then
+                label_size = math.min(label_size, math.max(11 * 0.68, 11 * room / natural * 0.97))
+            end
+        end
+    end
+    local face = U.face("cfont", label_size)
     for k, button in ipairs(bar.icon_widgets) do
         local tab = menu.tab_item_table[k]
         local title = tab and TITLES[tab.icon]
@@ -1031,9 +1049,9 @@ local function findItem(items, text)
 end
 
 local function addEdgesStyle(footer, menu_items)
-    local progress = findItem(menu_items.status_bar and menu_items.status_bar.sub_item_table, _("Progress bar"))
+    local progress = findItem(menu_items.status_bar and menu_items.status_bar.sub_item_table, KO_("Progress bar"))
     local settings = footer.settings
-    local margins = T(_("Margins: %1"), settings.progress_margin and _("same as book margins") or settings.progress_margin_width)
+    local margins = T(KO_("Margins: %1"), settings.progress_margin and KO_("same as book margins") or settings.progress_margin_width)
     for _i, item in ipairs(progress and progress.sub_item_table or {}) do
         if item.text_func and item.text_func() == margins then
             item.enabled_func = function()
@@ -1043,9 +1061,9 @@ local function addEdgesStyle(footer, menu_items)
     end
     for _i, item in ipairs(progress and progress.sub_item_table or {}) do
         local styles = item.sub_item_table
-        local thick = findItem(styles, _("Thick"))
-        local thin, thin_index = findItem(styles, _("Thin"))
-        if thick and thin and not findItem(styles, _("Medium")) then
+        local thick = findItem(styles, KO_("Thick"))
+        local thin, thin_index = findItem(styles, KO_("Thin"))
+        if thick and thin and not findItem(styles, KO_("Medium")) then
             local styleName = item.text_func
             item.text_func = function()
                 return settings.kcui_edges and _("Thickness and height: edges") or styleName()
@@ -1091,6 +1109,17 @@ local function installStatusBar()
     ReaderFooter.addToMainMenu = function(footer, menu_items)
         addToMainMenu(footer, menu_items)
         addEdgesStyle(footer, menu_items)
+        -- kcui: забираем родное меню «Status bar» из главного меню KOReader.
+        -- Оно будет доступно только через наш пункт «Строка состояния (верх/низ)».
+        if menu_items.status_bar then
+            footer._kcui_status_bar_menu = menu_items.status_bar
+            -- Первый элемент sub_item_table — альтернативная строка состояния (верх),
+            -- добавлена в ReaderFooter:addToMainMenu при наличии crelistener.
+            if footer.ui.crelistener and footer.ui.crelistener.getAltStatusBarMenu then
+                footer._kcui_alt_status_bar = menu_items.status_bar.sub_item_table[1]
+            end
+            menu_items.status_bar = nil
+        end
     end
     local genProgressBarPositionMenuItems = ReaderFooter.genProgressBarPositionMenuItems
     ReaderFooter.genProgressBarPositionMenuItems = function(footer, value)
@@ -1253,7 +1282,7 @@ local function installHeaderBar()
     local getAltStatusBarMenu = ReaderCoptListener.getAltStatusBarMenu
     ReaderCoptListener.getAltStatusBarMenu = function(listener)
         local menu = getAltStatusBarMenu(listener)
-        local _item, index = findItem(menu.sub_item_table, _("Chapter marks"))
+        local _item, index = findItem(menu.sub_item_table, KO_("Chapter marks"))
         table.insert(menu.sub_item_table, (index or #menu.sub_item_table) + 1, {
             text = _("Progress bar"),
             checked_func = function()
