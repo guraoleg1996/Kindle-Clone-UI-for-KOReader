@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "ko_KR".
 return {
+    ["OPDS catalog"] = "OPDS 카탈로그",
+    ["Exit"] = "종료",
+    ["Settings"] = "설정",
+    ["Open standard KOReader menu"] = "KOReader 기본 메뉴 열기",
+    ["The OPDS plugin is not available"] = "OPDS 플러그인을 사용할 수 없습니다",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI는 KOReader %1 이상이 필요하므로 시작되지 않았습니다.\n\n현재 KOReader %2입니다. KOReader를 업데이트해 주세요.",
     ["Library"] = "라이브러리",
     ["History"] = "내역",

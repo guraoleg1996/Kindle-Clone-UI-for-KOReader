@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "ka".
 return {
+    ["OPDS catalog"] = "OPDS კატალოგი",
+    ["Exit"] = "გასვლა",
+    ["Settings"] = "პარამეტრები",
+    ["Open standard KOReader menu"] = "KOReader-ის სტანდარტული მენიუს გახსნა",
+    ["The OPDS plugin is not available"] = "OPDS პლაგინი მიუწვდომელია",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI-ს სჭირდება KOReader %1 ან უფრო ახალი, ამიტომ ის არ გაეშვა.\n\nეს არის KOReader %2. გთხოვთ, განაახლოთ KOReader.",
     ["Library"] = "ბიბლიოთეკა",
     ["History"] = "ისტორია",
@@ -67,7 +72,7 @@ return {
     ["Page number"] = "გვერდის ნომერი",
     ["Percentage"] = "პროცენტი",
     ["Bottom left"] = "ქვედა მარცხენა",
-    ["Bottom right"] = "ქვედა მარჯვნივ",
+    ["Bottom right"] = "ქვედა მარჯვენა",
     ["Progress bar"] = "პროგრესის ზოლი",
     ["Reset this book?"] = "გავასუფთავოთ ეს წიგნი?",
     ["Its reading progress, bookmarks, highlights, notes and page settings will be permanently deleted, and the book will close."] = "მისი კითხვის პროგრესი, სანიშნეები, მონიშვნები, შენიშვნები და გვერდის პარამეტრები სამუდამოდ წაიშლება და წიგნი დაიხურება.",

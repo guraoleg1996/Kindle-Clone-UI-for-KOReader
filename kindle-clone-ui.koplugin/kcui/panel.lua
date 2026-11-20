@@ -53,6 +53,9 @@ local POSITION_OPTIONS = {
 }
 
 local TopBar = {}
+-- Panel is defined further down; More (the ⋮ menu of the open book) needs it already,
+-- so it is declared here (without this, "Open standard KOReader menu" in a book crashed).
+local Panel
 
 local function textItem(face, text_func)
     local widget = TextWidget:new{ text = "", face = face, fgcolor = Blitbuffer.Color8(0x40) }
@@ -973,8 +976,23 @@ function More.show(ui, panel, area)
         {},
     }
     table.insert(buttons, { { text = _("Status bar (top & bottom)"), chevron = true, callback = function() More.showProgress(ui, area, panel) end } })
+    -- Не используем action() (leave + run сразу): на Android это даёт destroyed mutex в HWUI.
+    -- Сначала закрываем только dropdown (close_first), панель reader закрываем позже внутри showNativeMenu.
+    table.insert(buttons, { {
+        text = _("Open standard KOReader menu"),
+        callback = function()
+            Panel.showNativeMenu(ui, panel)
+        end,
+    } })
     if Device:hasKeys() then
         table.insert(buttons, action(_("Turn off touchscreen"), More.disableTouch))
+    end
+    -- Тексты, которые дал сам KOReader («Reading ✓», «Collections…»): если у него нет
+    -- перевода на этот язык, берём перевод из каталога плагина.
+    for _i, row in ipairs(buttons) do
+        for _j, button in ipairs(row) do
+            if type(button.text) == "string" then button.text = I18n.native(button.text) end
+        end
     end
     More.dropdown(area, buttons)
 end
@@ -1043,7 +1061,7 @@ function TopBar.home(ui, window, tap_menu)
         HorizontalSpan:new{ width = U(13.6) },
     }
     local label = TextWidget:new{
-        text = _("Home"),
+        text = _("Library"),
         face = U.face("cfont", 16),
     }
     table.insert(group, label)
@@ -1251,7 +1269,7 @@ local function paintFooter(bb, footer, w)
     end
 end
 
-local Panel = InputContainer:extend{
+Panel = InputContainer:extend{
     ui = nil,
     kind = "quick",
     on_settings = nil,
@@ -1263,8 +1281,8 @@ function Panel:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = w, h = h }
     self.kcui_drawer = self.kind == "quick"
     if self.kind == "quick" then
-        local in_book = self.ui and self.ui.document ~= nil
-        self.top = (in_book and TopBar.home or TopBar.expanded)(self.ui, function() return self end)
+        -- Always the same full header (title + time + battery), both in library and in book
+        self.top = TopBar.expanded(self.ui, function() return self end)
     else
         self.top = TopBar.home(self.ui, function() return self end, true)
     end
@@ -1609,6 +1627,45 @@ function Panel:onPanPanel(_ev, ges)
 end
 
 function Panel:buildActions()
+    local face = self.action_face
+    local function textWidth(text, text_face)
+        local widget = TextWidget:new{ text = text, face = text_face or face }
+        local tw = widget:getSize().w
+        widget:free()
+        return tw
+    end
+    -- A long label goes on two lines (split at a space).
+    local function split(label, max_w)
+        local first, rest = label, nil
+        if textWidth(label) > max_w then
+            local words = {}
+            for word in label:gmatch("%S+") do table.insert(words, word) end
+            local n = 1
+            while n < #words and textWidth(table.concat(words, " ", 1, n + 1)) <= max_w do
+                n = n + 1
+            end
+            if n < #words then
+                first, rest = table.concat(words, " ", 1, n), table.concat(words, " ", n + 1)
+            end
+        end
+        return first, rest
+    end
+    -- One common (smaller) font for all tiles when a single word is still too wide:
+    -- without it the label would be cut with an ellipsis.
+    local ratio = 1
+    for _i, action in ipairs(self.actions) do
+        local label = type(action.label) == "function" and action.label() or action.label
+        local first, rest = split(label, action.max_w or U(170))
+        for _j, line in ipairs({ first, rest or false }) do
+            if line then
+                local w = textWidth(line)
+                local max_w = action.max_w or U(170)
+                if w > max_w then ratio = math.min(ratio, max_w / w * 0.97) end
+            end
+        end
+    end
+    ratio = math.max(ratio, I18n.minRatio())
+    local line_face = ratio < 1 and U.face("cfont", 17 * ratio) or face
     for _i, action in ipairs(self.actions) do
         local icon = type(action.icon) == "function" and action.icon() or action.icon
         local label = type(action.label) == "function" and action.label() or action.label
@@ -1622,28 +1679,10 @@ function Panel:buildActions()
             alpha = true,
         }
         local max_w = action.max_w or U(170)
-        local face = self.action_face
-        local function width(text)
-            local widget = TextWidget:new{ text = text, face = face }
-            local tw = widget:getSize().w
-            widget:free()
-            return tw
-        end
-        local first, rest = label, nil
-        if width(label) > max_w then
-            local words = {}
-            for word in label:gmatch("%S+") do table.insert(words, word) end
-            local n = 1
-            while n < #words and width(table.concat(words, " ", 1, n + 1)) <= max_w do
-                n = n + 1
-            end
-            if n < #words then
-                first, rest = table.concat(words, " ", 1, n), table.concat(words, " ", n + 1)
-            end
-        end
-        action.lines = { TextWidget:new{ text = first, face = self.action_face, max_width = max_w } }
+        local first, rest = split(label, max_w)
+        action.lines = { TextWidget:new{ text = first, face = line_face, max_width = max_w } }
         if rest then
-            table.insert(action.lines, TextWidget:new{ text = rest, face = self.action_face, max_width = max_w })
+            table.insert(action.lines, TextWidget:new{ text = rest, face = line_face, max_width = max_w })
         end
         action.line_h = math.floor(self.action_face.size * 1.3 + 0.5)
         action.x = action.cx - U(80)
@@ -1833,16 +1872,60 @@ function Panel.isDrawerShown()
     return false
 end
 
+-- "All settings" (button of the top curtain and item of the three-dots menu of the library):
+-- a separate window with the list of settings, built from the items of KOReader's own menu
+-- (see kcui/settings.lua). The same window works in the library and inside a book.
+function Panel.showSettings(ui)
+    ui = ui or require("apps/reader/readerui").instance
+        or require("apps/filemanager/filemanager").instance
+    if not ui then return end
+    require("kcui/settings").show(ui)
+end
+
+-- The ordinary KOReader menu with its tabs (from the three-dots menu in library and in a book).
+-- На Android закрытие панелей + сразу новое меню даёт "destroyed mutex" в HWUI (SIGABRT).
+-- Поэтому reader-панель не закрываем (меню открывается поверх), и на время показа
+-- отключаем наше оформление TouchMenu — чистый оригинальный вид KOReader.
+function Panel.showNativeMenu(ui, panel)
+    ui = ui or require("apps/reader/readerui").instance
+        or require("apps/filemanager/filemanager").instance
+    local menu = ui and ui.menu
+    if not menu then return end
+
+    local function open()
+        Panel._plain_native_menu = true
+        local ok, err
+        if ui.document and Panel._orig_reader_onShowMenu then
+            ok, err = pcall(Panel._orig_reader_onShowMenu, menu)
+        elseif not ui.document and Panel._orig_fm_onShowMenu then
+            menu._kcui_bypass = true
+            ok, err = pcall(Panel._orig_fm_onShowMenu, menu)
+            menu._kcui_bypass = nil
+        else
+            menu._kcui_bypass = true
+            ok, err = pcall(menu.onShowMenu, menu)
+            menu._kcui_bypass = nil
+        end
+        Panel._plain_native_menu = false
+        if not ok then
+            require("logger").warn("KindleCloneUI showNativeMenu:", err)
+            UIManager:show(require("ui/widget/infomessage"):new{
+                text = tostring(err),
+                timeout = 5,
+            })
+        end
+    end
+
+    -- Только ждём закрытия dropdown; reader-панель не трогаем.
+    UIManager:nextTick(open)
+end
+
 function Panel.showQuick(ui)
     UIManager:show(Panel:new{
         ui = ui,
         kind = "quick",
         on_settings = function()
-            local menu = ui.menu
-            local real = menu and not ui.document
-            if real then menu._kcui_bypass = true end
-            menu:onShowMenu()
-            if real then menu._kcui_bypass = nil end
+            Panel.showSettings(ui)
         end,
     })
 end
@@ -1874,6 +1957,7 @@ function Panel.install()
         return handled
     end
     local orig_fm_show = FileManagerMenu.onShowMenu
+    Panel._orig_fm_onShowMenu = orig_fm_show
     FileManagerMenu.onShowMenu = function(menu, tab_index, do_not_show)
         if do_not_show or menu._kcui_bypass then
             return orig_fm_show(menu, tab_index, do_not_show)
@@ -1883,9 +1967,7 @@ function Panel.install()
             ui = menu.ui,
             kind = "quick",
             on_settings = function()
-                menu._kcui_bypass = true
-                orig_fm_show(menu, tab_index)
-                menu._kcui_bypass = nil
+                Panel.showSettings(menu.ui)
             end,
         })
         return true
@@ -1899,14 +1981,21 @@ function Panel.install()
     end
 
     local ReaderMenu = require("apps/reader/modules/readermenu")
+    -- Сохраняем оригинальные методы, чтобы «Открыть стандартное меню KOReader» работало без краша.
+    Panel._orig_reader_onShowMenu = ReaderMenu.onShowMenu
+    Panel._orig_reader_onTapShowMenu = ReaderMenu.onTapShowMenu
+    Panel._orig_reader_onSwipeShowMenu = ReaderMenu.onSwipeShowMenu
+
     ReaderMenu.onSwipeShowMenu = function(menu, ges)
         if ges.direction == "south" then
+            -- Swipe down → quick-settings curtain (same look as in library)
             Panel.showQuick(menu.ui)
             menu.ui:handleEvent(Event:new("HandledAsSwipe"))
             return true
         end
     end
     ReaderMenu.onTapShowMenu = function(menu, ges)
+        -- Tap in the book → normal reader top/bottom chrome (was broken by previous fix)
         UIManager:show(Panel:new{ ui = menu.ui, kind = "reader", opening = ges and ges.start_pos })
         return true
     end

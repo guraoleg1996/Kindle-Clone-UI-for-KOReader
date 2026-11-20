@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "bg_BG".
 return {
+    ["OPDS catalog"] = "OPDS каталог",
+    ["Exit"] = "Изход",
+    ["Settings"] = "Настройки",
+    ["Open standard KOReader menu"] = "Отваряне на стандартното меню на KOReader",
+    ["The OPDS plugin is not available"] = "Добавката OPDS не е налична",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI изисква KOReader %1 или по-нов, затова не е стартиран.\n\nТова е KOReader %2. Моля, обновете KOReader.",
     ["Library"] = "Библиотека",
     ["History"] = "Хронология",

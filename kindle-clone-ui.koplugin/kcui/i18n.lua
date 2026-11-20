@@ -99,7 +99,8 @@ local function templatesOf(cat, code)
                 order[#order + 1] = tonumber(n)
                 return "(.-)"
             end) .. "$"
-            list[#list + 1] = { pattern = pattern, order = order, text = value, size = #key }
+            list[#list + 1] = { pattern = pattern, order = order, text = value, size = #key,
+                leading = key:find("^%%%d") ~= nil }
         end
     end
     table.sort(list, function(a, b) return a.size > b.size end)
@@ -107,14 +108,58 @@ local function templatesOf(cat, code)
     return list
 end
 
-function I18n.native(text)
+-- Украшения, которые KOReader дописывает к тексту пункта: галочка «✓», многоточие,
+-- пробелы и невидимые метки направления письма. Перевод ищется для самого текста
+-- без них, а потом они возвращаются на место («Reading  ✓» -> «Читаю  ✓»).
+local DECOR = {
+    "\226\156\147",                                   -- ✓
+    "\226\128\166", "...",                            -- … и ...
+    "\226\128\142", "\226\128\143",                  -- LRM, RLM
+    "\226\128\170", "\226\128\171", "\226\128\172", "\226\128\173", "\226\128\174",
+    "\226\129\166", "\226\129\167", "\226\129\168", "\226\129\169",
+    "\194\160", " ", "\t",
+}
+
+local function peelDecor(text)
+    local lead, trail = "", ""
+    local changed = true
+    while changed and #text > 0 do
+        changed = false
+        for _i, token in ipairs(DECOR) do
+            local n = #token
+            if #text > n and text:sub(1, n) == token then
+                lead = lead .. token
+                text = text:sub(n + 1)
+                changed = true
+            end
+            if #text > n and text:sub(-n) == token then
+                trail = token .. trail
+                text = text:sub(1, #text - n)
+                changed = true
+            end
+        end
+    end
+    return lead, text, trail
+end
+
+function I18n.native(text, _decor_done)
     if type(text) ~= "string" or text == "" then return text end
     local cat = catalog()
     if not cat then return text end
     local direct = cat[text]
     if type(direct) == "string" and direct ~= "" then return direct end
+    if not _decor_done then
+        local lead, core, trail = peelDecor(text)
+        if core ~= text and core ~= "" then
+            local translated = I18n.native(core, true)
+            if translated ~= core then return lead .. translated .. trail end
+        end
+    end
     for _i, template in ipairs(templatesOf(cat, I18n.lang())) do
         local found = { text:match(template.pattern) }
+        -- Шаблон, который начинается с подстановки («%1 selected»), подходит только к короткому
+        -- значению без пробелов (число, «Dot»): иначе он ломает длинные английские фразы.
+        if #found > 0 and template.leading and (found[1] == "" or found[1]:find("%s")) then found = {} end
         if #found > 0 then
             return (template.text:gsub("%%(%d)", function(n)
                 for index, number in ipairs(template.order) do

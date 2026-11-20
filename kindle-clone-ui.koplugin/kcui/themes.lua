@@ -357,6 +357,14 @@ function Sheet:buildThemes()
                 entry.suffix = self:fitted(_("- default"), self.italic, label_w)
             end
         end
+        -- a long theme name gets a smaller font first (as far as the language allows)
+        local natural = entry.label:getSize().w
+        if natural > label_w and self.face and self.face.orig_font then
+            local k = math.max(require("kcui/i18n").minRatio(), label_w / natural * 0.97)
+            entry.label:free()
+            entry.label = self:text(entry.name, current, Font:getFace(self.face.orig_font, self.face.orig_size * k),
+                entry.disabled and Gray.inactive or nil)
+        end
         entry.label:setMaxWidth(label_w)
         if current then
             entry.note = self:fitted(_("Current Theme"), self.italic, column_w - R(125))

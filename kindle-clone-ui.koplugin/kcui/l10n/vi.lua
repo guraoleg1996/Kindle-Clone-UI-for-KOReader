@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "vi".
 return {
+    ["OPDS catalog"] = "Danh mục OPDS",
+    ["Exit"] = "Thoát",
+    ["Settings"] = "Cài đặt",
+    ["Open standard KOReader menu"] = "Mở menu tiêu chuẩn của KOReader",
+    ["The OPDS plugin is not available"] = "Plugin OPDS không khả dụng",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI cần KOReader %1 trở lên nên chưa được khởi động.\n\nĐây là KOReader %2. Vui lòng cập nhật KOReader.",
     ["Library"] = "Thư viện",
     ["History"] = "Lịch sử",
@@ -109,7 +114,7 @@ return {
     ["%1 left in chapter"] = "Còn %1 là hết chương",
     ["Margins: %1"] = "Lề: %1",
     ["same as book margins"] = "giống như lề sách",
-    ["Thick"] = "dày",
+    ["Thick"] = "Dày",
     ["Thin"] = "mỏng",
     ["Medium"] = "Vừa",
     ["Thickness and height: edges"] = "Độ dày và chiều cao: cạnh",

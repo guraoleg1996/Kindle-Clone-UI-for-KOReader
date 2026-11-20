@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "ar".
 return {
+    ["OPDS catalog"] = "فهرس OPDS",
+    ["Exit"] = "خروج",
+    ["Settings"] = "الإعدادات",
+    ["Open standard KOReader menu"] = "فتح قائمة KOReader القياسية",
+    ["The OPDS plugin is not available"] = "إضافة OPDS غير متاحة",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "يتطلب Kindle Clone UI إصدار KOReader %1 أو أحدث، لذلك لم يتم تشغيله.\n\nهذا هو KOReader %2. يُرجى تحديث KOReader.",
     ["Library"] = "المكتبة",
     ["History"] = "السجل",

@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "it_IT".
 return {
+    ["OPDS catalog"] = "Catalogo OPDS",
+    ["Exit"] = "Esci",
+    ["Settings"] = "Impostazioni",
+    ["Open standard KOReader menu"] = "Apri il menu standard di KOReader",
+    ["The OPDS plugin is not available"] = "Il plugin OPDS non è disponibile",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI richiede KOReader %1 o successivo, quindi non è stato avviato.\n\nQuesto è KOReader %2. Aggiorna KOReader.",
     ["Library"] = "Libreria",
     ["History"] = "Cronologia",
@@ -70,6 +75,7 @@ return {
     ["Reset book"] = "Reimposta libro",
     ["Reset this book?"] = "Reimpostare questo libro?",
     ["Its reading progress, bookmarks, highlights, notes and page settings will be permanently deleted, and the book will close."] = "I progressi di lettura, i segnalibri, le evidenziazioni, le note e le impostazioni di pagina verranno eliminati definitivamente e il libro verrà chiuso.",
+    ["Bottom of page"] = "Fine pagina",
     ["Turn off touchscreen"] = "Disattiva touchscreen",
     ["Turn off the touchscreen?"] = "Disattivare il touchscreen?",
     ["Turn off"] = "Disattiva",

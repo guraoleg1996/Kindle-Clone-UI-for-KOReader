@@ -82,28 +82,40 @@ function Units.fit()
 end
 
 -- Single-line text that always fits `max_width`: the font shrinks down to
--- `min_ratio` of its size first, and only then is the text cut with an ellipsis.
--- opts: text, size (units), name (font, default "cfont"), bold, fgcolor, max_width, min_ratio
+-- `min_ratio` of its size first; if the text still does not fit, the shorter texts from
+-- `fallbacks` are tried (in order), and only the last resort is cut with an ellipsis.
+-- opts: text, size (units), name (font, default "cfont"), bold, fgcolor, max_width,
+--       min_ratio, fallbacks (list of shorter texts)
 function Units.fitText(opts)
     local TextWidget = require("ui/widget/textwidget")
     local name = opts.name or "cfont"
-    local function make(size, max_width)
+    local function make(text, size, max_width)
         return TextWidget:new{
-            text = opts.text,
+            text = text,
             face = Units.face(name, size),
             bold = opts.bold,
             fgcolor = opts.fgcolor,
             max_width = max_width,
         }
     end
-    local widget = make(opts.size)
     local max_w = opts.max_width
-    if not max_w then return widget end
-    local natural = widget:getSize().w
-    if natural <= max_w then return widget end
-    widget:free()
-    local size = math.max(opts.size * (opts.min_ratio or require("kcui/i18n").minRatio()), opts.size * max_w / natural * 0.97)
-    return make(size, max_w)
+    if not max_w then return make(opts.text, opts.size) end
+    local min_ratio = opts.min_ratio or require("kcui/i18n").minRatio()
+    local candidates = { opts.text }
+    for _i, alt in ipairs(opts.fallbacks or {}) do
+        if type(alt) == "string" and alt ~= "" and alt ~= opts.text then candidates[#candidates + 1] = alt end
+    end
+    for index, text in ipairs(candidates) do
+        local widget = make(text, opts.size)
+        local natural = widget:getSize().w
+        if natural <= max_w then return widget end
+        widget:free()
+        local size = math.max(opts.size * min_ratio, opts.size * max_w / natural * 0.97)
+        -- the text fits at this size (the last candidate is cut with an ellipsis anyway)
+        if natural * size / opts.size <= max_w * 1.02 or index == #candidates then
+            return make(text, size, max_w)
+        end
+    end
 end
 
 -- Width of `text` in a face, used to pick one common font size for a row of labels.
@@ -226,12 +238,112 @@ local function retarget(face, path)
         logger.warn("KindleFonts: cannot load", path, ftsize)
         return
     end
+    local old_hash = face.hash
     face.ftsize = ftsize
     face.realname = path
     face.is_real_bold = Font:isRealBoldFont(path)
     face.embolden_half_strength = nil
+    -- KOReader shapes text with HarfBuzz and keeps the HarfBuzz font inside the face
+    -- table (`_hb_font_data`). It was built from the OLD font file, so after the file is
+    -- swapped the text would be shaped with the old font's glyph numbers but drawn from
+    -- the new font: the letters come out as garbage. That happened in the standard
+    -- KOReader menu on devices where the menu had already drawn some text before this
+    -- plugin started. Dropping the cache makes KOReader build it again from the new
+    -- font. The cached fallback fonts are dropped for the same reason.
+    face._hb_font_data = nil
+    face.fallbacks = nil
     face.hash = path .. face.size
     Font.faces[face.hash] = face
+    -- The face used to be stored under the name of the old file ("NotoSans-Regular.ttf12").
+    -- KOReader looks up its first fallback font under exactly that name. Leaving the entry
+    -- there would turn the fallback into Amazon Ember as well, so every character that
+    -- Ember lacks could no longer be taken from Noto Sans. Dropping the entry lets
+    -- KOReader load the real Noto Sans again when it needs it.
+    if old_hash and old_hash ~= face.hash and Font.faces[old_hash] == face then
+        Font.faces[old_hash] = nil
+    end
+end
+
+-- Check whether the font has the glyphs needed for UI (especially Cyrillic).
+-- Returns true if coverage looks good enough to safely replace system fonts.
+local function fontHasSafeCoverage(path)
+    local ok, ftsize = pcall(Freetype.newFaceSize, path, 16)
+    if not ok or not ftsize then
+        return false
+    end
+
+    -- Characters that commonly appear in KOReader menus and that cause
+    -- "кракозябры" when missing: basic Latin + Cyrillic + a few punctuation.
+    local test_chars = {
+        -- Latin
+        0x0041, 0x0061, 0x0042, 0x0062, -- A a B b
+        0x0045, 0x0065, -- E e
+        -- Cyrillic (most common source of garbled text for Russian users)
+        0x0410, 0x0430, -- А а
+        0x0411, 0x0431, -- Б б
+        0x0412, 0x0432, -- В в
+        0x0414, 0x0434, -- Д д
+        0x0415, 0x0435, -- Е е
+        0x0416, 0x0436, -- Ж ж
+        0x0418, 0x0438, -- И и
+        0x041A, 0x043A, -- К к
+        0x041C, 0x043C, -- М м
+        0x041D, 0x043D, -- Н н
+        0x041E, 0x043E, -- О о
+        0x041F, 0x043F, -- П п
+        0x0420, 0x0440, -- Р р
+        0x0421, 0x0441, -- С с
+        0x0422, 0x0442, -- Т т
+        0x0423, 0x0443, -- У у
+        0x0427, 0x0447, -- Ч ч
+        0x042F, 0x044F, -- Я я
+        -- Frequent UI symbols
+        0x00AB, 0x00BB, -- « »
+        0x2013, 0x2014, -- – —
+        0x2026,         -- …
+    }
+
+    local missing = 0
+    local total = #test_chars
+
+    if type(ftsize.hasGlyph) == "function" then
+        for _i, code in ipairs(test_chars) do
+            local ok_glyph, present = pcall(ftsize.hasGlyph, ftsize, code)
+            if not ok_glyph or not present then
+                missing = missing + 1
+            end
+        end
+    else
+        -- Fallback via the underlying FreeType face
+        local face = ftsize.face
+        local ft2 = package.loaded["ffi/freetype"] and package.loaded["ffi/freetype"].ft2
+        if face and ft2 and ft2.FT_Get_Char_Index then
+            for _i, code in ipairs(test_chars) do
+                local idx = 0
+                pcall(function()
+                    idx = ft2.FT_Get_Char_Index(face, code)
+                end)
+                if idx == 0 then
+                    missing = missing + 1
+                end
+            end
+        else
+            ftsize:done()
+            return false
+        end
+    end
+
+    ftsize:done()
+
+    -- Allow a couple of missing glyphs (rare punctuation), but not many.
+    -- If more than ~15% are missing → high risk of "кракозябры".
+    local ratio = missing / total
+    if ratio > 0.15 then
+        logger.warn("KindleFonts: poor glyph coverage in", path,
+            string.format("(missing %d/%d = %.0f%%)", missing, total, ratio * 100))
+        return false
+    end
+    return true
 end
 
 local function applyUIFont()
@@ -250,6 +362,23 @@ local function applyUIFont()
         Font.bold_font_variant[regular] = bold
         Font.regular_font_variant[bold] = regular
     end
+
+    -- Manual override still has priority.
+    if G_reader_settings:isFalse("kcui_override_system_fonts") then
+        logger.info("KindleFonts: system font override disabled by setting")
+        return
+    end
+
+    -- Automatic safety check: if the font lacks important glyphs (especially
+    -- Cyrillic), do NOT replace system fonts. This prevents "кракозябры" in
+    -- the original KOReader menus on devices where Ember coverage is incomplete.
+    if not fontHasSafeCoverage(regular) then
+        -- Only for this start: the decision is NOT saved, so one failed check can never
+        -- switch the Kindle font off for good.
+        logger.warn("KindleFonts: system font override skipped for this start (unsafe coverage)")
+        return
+    end
+
     local replacement = {
         ["NotoSans-Regular.ttf"] = regular,
         ["NotoSans-Bold.ttf"] = bold or regular,

@@ -768,6 +768,12 @@ local function installMainMenu()
     TouchMenu._kcui_main = true
     local orig_init = TouchMenu.init
     TouchMenu.init = function(menu, ...)
+        -- Явный запрос «стандартное меню KOReader» — без нашего оформления,
+        -- чтобы не трогать виджеты/ресурсы и не ловить destroyed mutex на Android.
+        local Panel = require("kcui/panel")
+        if Panel._plain_native_menu then
+            return orig_init(menu, ...)
+        end
         if menu.tab_item_table then
             local tabs = {}
             for i, tab in ipairs(menu.tab_item_table) do
@@ -801,6 +807,10 @@ local function installMainMenu()
     local orig_update = TouchMenu.updateItems
     local item_face = U.face("smallinfofont", 20)
     TouchMenu.updateItems = function(menu, ...)
+        local Panel = require("kcui/panel")
+        if Panel._plain_native_menu or not menu._kcui_header then
+            return orig_update(menu, ...)
+        end
         orig_update(menu, ...)
         if not TouchMenu._kcui_item_face then
             for _i, widget in ipairs(menu.item_group) do

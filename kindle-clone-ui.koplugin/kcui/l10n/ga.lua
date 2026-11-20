@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "ga".
 return {
+    ["OPDS catalog"] = "Catalóg OPDS",
+    ["Exit"] = "Scoir",
+    ["Settings"] = "Socruithe",
+    ["Open standard KOReader menu"] = "Oscail gnáthroghchlár KOReader",
+    ["The OPDS plugin is not available"] = "Níl an breiseán OPDS ar fáil",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Teastaíonn KOReader %1 nó níos nuaí ó Kindle Clone UI, mar sin níor tosaíodh é.\n\nIs KOReader %2 é seo. Nuashonraigh KOReader le do thoil.",
     ["Library"] = "Leabharlann",
     ["History"] = "Stair",

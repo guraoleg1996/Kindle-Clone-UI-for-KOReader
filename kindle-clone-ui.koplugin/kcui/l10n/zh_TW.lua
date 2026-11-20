@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "zh_TW".
 return {
+    ["OPDS catalog"] = "OPDS 目錄",
+    ["Exit"] = "結束",
+    ["Settings"] = "設定",
+    ["Open standard KOReader menu"] = "開啟 KOReader 標準選單",
+    ["The OPDS plugin is not available"] = "OPDS 外掛程式無法使用",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI 需要 KOReader %1 或更高版本，因此未能啟動。\n\n目前為 KOReader %2。請更新 KOReader。",
     ["Library"] = "書庫",
     ["History"] = "歷史記錄",

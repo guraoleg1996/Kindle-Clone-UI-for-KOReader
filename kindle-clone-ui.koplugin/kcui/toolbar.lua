@@ -1,6 +1,7 @@
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
 local Device = require("device")
+local Event = require("ui/event")
 local FileChooser = require("ui/widget/filechooser")
 local FileManager = require("apps/filemanager/filemanager")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -616,9 +617,8 @@ function Toolbar.border()
 end
 
 function Toolbar.height(menu)
-    if inFolder(menu) then
-        return U(58.8)
-    end
+    -- Always use the full-height toolbar so the search field stays a full
+    -- search bar (pill) even when browsing inside a folder.
     return U(8) + U(48.5) + U(14) + U.ceil(1)
 end
 
@@ -751,6 +751,68 @@ local function searchBar(menu, w, h, geo, on_submit, hint)
     return bar
 end
 
+-- Опускает ошибку в окно сообщения, а не роняет KOReader.
+local function guarded(fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        require("logger").warn("KindleCloneUI:", err)
+        UIManager:show(require("ui/widget/infomessage"):new{ text = tostring(err), timeout = 5 })
+    end
+end
+
+-- The OPDS catalog that is built into KOReader (the "OPDS catalog" item of its own menu).
+-- The plugin registers itself in the file manager under the name "opds" and the catalog
+-- is opened by its onShowOPDSCatalog().
+function Toolbar.openOPDS(fm)
+    local ui = FileManager.instance or fm
+    local opds = (ui and ui.opds) or (fm and fm.opds)
+    if opds and type(opds.onShowOPDSCatalog) == "function" then
+        guarded(opds.onShowOPDSCatalog, opds)
+        return
+    end
+    -- KOReader's event handler may successfully open the catalog and still return nil.
+    -- Therefore its return value cannot be used to detect whether OPDS is available.
+    -- Send the event and let KOReader's OPDS plugin handle it; otherwise we would show
+    -- a false "plugin is not available" message over an already opened catalog.
+    if ui and type(ui.handleEvent) == "function" then
+        ui:handleEvent(Event:new("ShowOPDSCatalog"))
+    else
+        UIManager:show(require("ui/widget/infomessage"):new{ text = _("The OPDS plugin is not available") })
+    end
+end
+
+-- Menu of the three dots in the library: OPDS catalog, Settings, standard KOReader menu, Exit.
+-- `anchor` = { right, top, notch_x } — where the list hangs under the toolbar.
+function Toolbar.showMore(fm, anchor)
+    local function Panel() return require("kcui/panel") end
+    local buttons = {
+        { {
+            text = _("OPDS catalog"),
+            callback = function() Toolbar.openOPDS(fm) end,
+        } },
+        { {
+            text = _("Settings"),
+            callback = function() guarded(function() Panel().showSettings(fm) end) end,
+        } },
+        { {
+            text = _("Open standard KOReader menu"),
+            callback = function() guarded(function() Panel().showNativeMenu(fm) end) end,
+        } },
+        {},
+        { {
+            text = _("Exit"),
+            callback = function() UIManager:broadcastEvent(Event:new("Exit")) end,
+        } },
+    }
+    UIManager:show(Toolbar.Dropdown:new{
+        buttons = buttons,
+        anchor_right = anchor.right,
+        anchor_top = anchor.top,
+        notch_x = anchor.notch_x,
+        close_first = true,
+    })
+end
+
 function Toolbar.new(menu, w)
     if menu._kcui_search_bar then
         return menu._kcui_search_bar
@@ -762,7 +824,7 @@ function Toolbar.new(menu, w)
     local gap = U(20)
     local top = U(8)
     local pill_h = U(48.5)
-    local center_y = in_folder and U(28) or top + math.floor(pill_h / 2)
+    local center_y = top + math.floor(pill_h / 2)
     local line_h = Toolbar.border()
     local line_color = Gray.divider
 
@@ -777,17 +839,27 @@ function Toolbar.new(menu, w)
     local plus_inset = math.floor(plus_size * 0.125)
     local sort = icon("sort.svg", U(24), U(24))
     local glass = icon("search.svg", U(17), U(17))
-    local search = icon("search.svg", U(19), U(19))
 
     local filter_x = pad
-    local sort_x = w - pad - sort:getSize().w
-    local spacing = U(28.5)
+    -- Three vertical dots to the right of the sort icon: the same picture as the ⋮ button of
+    -- the open book (icons/reader/more.svg). The dots are narrow, so the icon box is placed
+    -- such that the dots themselves (not the empty box around them) line up with the margin.
+    local more = ImageWidget:new{ original_in_nightmode = false, file = DROPDOWN_ICONS .. "/reader/more.svg", width = U(26), height = U(26), alpha = true }
+    local more_size = more:getSize().w
+    local more_x = w - pad - math.floor(more_size * 15 / 26)
+    local more_left = more_x + math.floor(more_size * 11 / 26)
+    -- On narrow screens (phones) the icons sit closer together, so that the search bar keeps
+    -- enough room for its hint; on wide screens the usual spacing is used.
+    local roomy = math.max(0, math.min(1, (U.canvas() - 400) / 120))
+    local spacing = U(18 + (28.5 - 18) * roomy)
+    local pill_gap = U(14 + (20 - 14) * roomy)
+    local sort_x = more_left - spacing - sort:getSize().w
     local plus_x = sort_x - spacing - plus_size + plus_inset
     local hide_plus = in_folder and not selecting and require("kcui/library").inSeries(menu)
-    local search_x = hide_plus and plus_x + plus_size - plus_inset - search:getSize().w
-        or plus_x + plus_inset - spacing - search:getSize().w
     local pill_x = filter_x + filter:getSize().w + spacing
-    local pill_w = plus_x + plus_inset - U(20) - pill_x
+    -- without the plus button (inside a series) the search bar takes its place
+    local pill_right = hide_plus and (sort_x - pill_gap) or (plus_x + plus_inset - pill_gap)
+    local pill_w = pill_right - pill_x
     local close_x
     local close_size = U(28.4)
     if selecting then
@@ -805,15 +877,16 @@ function Toolbar.new(menu, w)
     end
     local pill = Pill:new{ width = pill_w, height = pill_h }
     pill.overlap_offset = { pill_x, top }
-    local glass_x = pill_x + U(28)
-    local label_x = glass_x + glass:getSize().w + U(17)
+    local glass_x = pill_x + U(20 + (28 - 20) * roomy)
+    local label_x = glass_x + glass:getSize().w + U(10 + (17 - 10) * roomy)
     -- the hint always fits inside the pill, whatever the screen or the language
-    local label = U.fitText{ text = _("Search KOReader"), size = 18, max_width = pill_x + pill_w - label_x - U(22) }
+    local label = U.fitText{ text = _("Search KOReader"), fallbacks = { _("Search") }, size = 18, max_width = pill_x + pill_w - label_x - U(16 + (22 - 16) * roomy) }
 
     local layout = OverlapGroup:new{
         dimen = Geom:new{ w = w, h = h },
         place(filter, filter_x),
         place(sort, sort_x),
+        place(more, more_x),
         LineWidget:new{
             dimen = Geom:new{ w = w, h = line_h },
             background = line_color,
@@ -825,7 +898,7 @@ function Toolbar.new(menu, w)
         table.insert(layout, place(plus, plus_x))
     end
 
-    local middle_end = plus_x
+    local middle_end = hide_plus and sort_x or plus_x
     local done_x, all_x, all_w
     if selecting then
         local box = U(21.27)
@@ -849,12 +922,10 @@ function Toolbar.new(menu, w)
         table.insert(layout, place(done, done_x))
         table.insert(layout, place(all_row, all_x))
         table.insert(layout, place(icon("close.svg", close_size, close_size), close_x))
-    elseif in_folder then
-        table.insert(layout, place(search, search_x))
-        middle_end = search_x
     elseif filtered then
         addFilterChip(layout, filtered, pill_x, top, pill_h, pill_w, place)
     else
+        -- Always show the full search bar (pill), including when inside a folder.
         table.insert(layout, pill)
         table.insert(layout, place(glass, glass_x))
         table.insert(layout, place(label, label_x))
@@ -887,17 +958,15 @@ function Toolbar.new(menu, w)
         if x < pill_x - math.floor(gap / 2) then
             showFilter(fm)
         elseif not selecting and x < middle_end - math.floor(gap / 2) then
-            if filtered and not in_folder then
+            if filtered then
                 require("kcui/library").clearFilters(fm)
-            elseif not in_folder then
+            else
                 enterSearch()
             end
         elseif selecting and x < done_x - U(6) then
             if x >= all_x - U(8) and x <= all_x + all_w + U(8) then
                 toggleAll(fm, menu)
             end
-        elseif in_folder and not selecting and x < (hide_plus and sort_x - math.floor(gap / 2) or plus_x) then
-            enterSearch()
         elseif selecting and x >= close_x - U(6) and x < sort_x - math.floor(gap / 2) then
             fm:onToggleSelectMode(true)
         elseif x < sort_x - math.floor(gap / 2) then
@@ -906,8 +975,15 @@ function Toolbar.new(menu, w)
             else
                 fm:onShowPlusMenu()
             end
-        else
+        elseif x < math.floor((sort_x + sort:getSize().w + more_left) / 2) then
             showSort(fm)
+        else
+            -- Three-dots menu: OPDS catalog, Settings, standard KOReader menu, Exit
+            Toolbar.showMore(fm, {
+                right = Screen:getWidth() - U(8),
+                top = self.dimen.y + h + U(4),
+                notch_x = self.dimen.x + more_x + math.floor(more_size / 2),
+            })
         end
         return true
     end
@@ -1108,41 +1184,73 @@ function Toolbar.titleHeader(w, title, count, on_back, on_plus, on_more)
     end
     local label = countLabel(count and count > 0 and T(_.ngettext("(%1 item)", "(%1 items)", count), count) or "")
     local arrow_w = on_back and icon + gap or 0
-    local room = plus_x - pad - arrow_w - U(9.5) - U(20)
+    local room
+    if on_plus or on_more then
+        room = plus_x - pad - arrow_w - U(9.5) - U(20)
+    else
+        -- справа нет кнопок: заголовку доступна вся ширина строки
+        room = w - 2 * pad - arrow_w - ((count and count > 0) and U(9.5) or 0)
+    end
     if count and count > 0 and U.textWidth(title, "cfont", 18, true) > room - label:getSize().w then
         -- the name would be cut: the count shrinks to just the number instead
         label:free()
         label = countLabel("(" .. count .. ")")
     end
-    local name = TextWidget:new{
+    -- Заголовок никогда не обрезается многоточием: не влез в одну строку —
+    -- идёт в две строки чуть меньшим шрифтом.
+    local name_room = room - label:getSize().w
+    local name, name_lines
+    local single = TextWidget:new{
         text = title,
         face = U.face("cfont", 18),
         bold = true,
-        max_width = room - label:getSize().w,
     }
+    if single:getSize().w <= name_room then
+        name, name_lines = single, 1
+    else
+        single:free()
+        name, name_lines = makeText(title, { size = 16, cap = name_room, bold = true, wrap = true, max_lines = 2 })
+    end
+    local multi = name_lines > 1
     local group = HorizontalGroup:new{ align = "center" }
     if on_back then
         table.insert(group, ImageWidget:new{ original_in_nightmode = false, file = ICONS .. "/../arrow-left.svg", width = icon, height = icon, alpha = true })
-        table.insert(group, HorizontalSpan:new{ width = gap })
+        if not multi then table.insert(group, HorizontalSpan:new{ width = gap }) end
     end
-    table.insert(group, name)
-    if count and count > 0 then
-        table.insert(group, HorizontalSpan:new{ width = U(9.5) })
-        table.insert(group, label)
+    if not multi then
+        table.insert(group, name)
+        if count and count > 0 then
+            table.insert(group, HorizontalSpan:new{ width = U(9.5) })
+            table.insert(group, label)
+        end
     end
     local center_y = h - U(Toolbar.BACK_ROW_CENTER)
     local group_x = on_back and pad - math.floor(icon * 3 / 24) or pad
-    group.overlap_offset = { group_x, center_y - math.floor(group:getSize().h / 2) }
     local border = Toolbar.border()
     local layout = OverlapGroup:new{
         dimen = Geom:new{ w = w, h = h },
-        group,
         LineWidget:new{
             dimen = Geom:new{ w = w, h = border },
             background = Gray.divider,
             overlap_offset = { 0, h - border },
         },
     }
+    if #group > 0 then
+        group.overlap_offset = { group_x, center_y - math.floor(group:getSize().h / 2) }
+        table.insert(layout, group)
+    end
+    if multi then
+        -- две строки заголовка стоят по центру строки заголовка, стрелка остаётся на своём месте
+        local text_x = group_x + (on_back and (icon + gap) or 0)
+        local block_h = name:getSize().h
+        local top = math.max(U(2), math.floor((h - border - block_h) / 2))
+        name.overlap_offset = { text_x, top }
+        table.insert(layout, name)
+        if count and count > 0 then
+            label.overlap_offset = { text_x + name:getSize().w + U(9.5), top + math.floor((block_h - label:getSize().h) / 2) }
+            table.insert(layout, label)
+        end
+    end
     if on_plus then
         local plus = ImageWidget:new{ original_in_nightmode = false, file = ICONS .. "/Add.svg", width = plus_size, height = plus_size, alpha = true }
         plus.overlap_offset = { plus_x, center_y - math.floor(plus_size / 2) }

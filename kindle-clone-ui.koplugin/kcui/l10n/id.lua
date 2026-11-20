@@ -1,5 +1,11 @@
 -- Kindle Clone UI: texts and date data for KOReader language "id".
 return {
+    ["Font"] = "Font",
+    ["OPDS catalog"] = "Katalog OPDS",
+    ["Exit"] = "Keluar",
+    ["Settings"] = "Pengaturan",
+    ["Open standard KOReader menu"] = "Buka menu standar KOReader",
+    ["The OPDS plugin is not available"] = "Plugin OPDS tidak tersedia",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI memerlukan KOReader %1 atau yang lebih baru sehingga tidak dijalankan.\n\nIni KOReader %2. Harap perbarui KOReader.",
     ["Library"] = "Pustaka",
     ["History"] = "Riwayat",
@@ -67,7 +73,7 @@ return {
     ["Page number"] = "Nomor halaman",
     ["Percentage"] = "Persentase",
     ["Bottom left"] = "Bawah kiri",
-    ["Bottom right"] = "Kanan bawah",
+    ["Bottom right"] = "Bawah kanan",
     ["Progress bar"] = "Bilah progres",
     ["Reset this book?"] = "Setel ulang buku ini?",
     ["Its reading progress, bookmarks, highlights, notes and page settings will be permanently deleted, and the book will close."] = "Progres membaca, markah, sorotan, catatan, dan pengaturan halaman akan dihapus permanen, dan buku akan ditutup.",

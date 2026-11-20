@@ -1,5 +1,15 @@
 -- Kindle Clone UI: texts and date data for KOReader language "ro".
 return {
+    ["Compact"] = "Compact",
+    ["Font"] = "Font",
+    ["Manual"] = "Manual",
+    ["OK"] = "OK",
+    ["Standard"] = "Standard",
+    ["OPDS catalog"] = "Catalog OPDS",
+    ["Exit"] = "Ieșire",
+    ["Settings"] = "Setări",
+    ["Open standard KOReader menu"] = "Deschide meniul standard KOReader",
+    ["The OPDS plugin is not available"] = "Pluginul OPDS nu este disponibil",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI necesită KOReader %1 sau mai nou, deci nu a fost pornit.\n\nAceasta este versiunea %2 a KOReader. Actualizați KOReader.",
     ["Library"] = "Bibliotecă",
     ["History"] = "Istoric",

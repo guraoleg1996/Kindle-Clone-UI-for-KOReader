@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "lt_LT".
 return {
+    ["OPDS catalog"] = "OPDS katalogas",
+    ["Exit"] = "Išeiti",
+    ["Settings"] = "Nustatymai",
+    ["Open standard KOReader menu"] = "Atidaryti standartinį KOReader meniu",
+    ["The OPDS plugin is not available"] = "OPDS papildinys nepasiekiamas",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "Kindle Clone UI reikia KOReader %1 ar naujesnės versijos, todėl jis nebuvo paleistas.\n\nTai KOReader %2. Atnaujinkite KOReader.",
     ["Library"] = "Biblioteka",
     ["History"] = "Istorija",

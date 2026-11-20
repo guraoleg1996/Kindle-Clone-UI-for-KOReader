@@ -1,5 +1,10 @@
 -- Kindle Clone UI: texts and date data for KOReader language "hu".
 return {
+    ["OPDS catalog"] = "OPDS-katalógus",
+    ["Exit"] = "Kilépés",
+    ["Settings"] = "Beállítások",
+    ["Open standard KOReader menu"] = "A KOReader szokásos menüjének megnyitása",
+    ["The OPDS plugin is not available"] = "Az OPDS bővítmény nem érhető el",
     ["Kindle Clone UI needs KOReader %1 or later, so it has not been started.\n\nThis is KOReader %2. Please update KOReader."] = "A Kindle Clone UI-hoz KOReader %1 vagy újabb szükséges, ezért nem indult el.\n\nEz a KOReader %2. Kérjük, frissítse a KOReadert.",
     ["Library"] = "Könyvtár",
     ["History"] = "Előzmények",
