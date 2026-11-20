@@ -1,6 +1,6 @@
 # Kindle Clone UI for KOReader
 
-<img width="1376" height="768" alt="Gemini_Generated_Image_qirgqcqirgqcqirg" src="https://github.com/user-attachments/assets/e8e6065b-d0ff-4929-a40d-fb626f305111" />
+<img width="1377" height="768" alt="Gemini_Generated_Image_le5zdple5zdple5z" src="https://github.com/user-attachments/assets/fbde4363-ffed-4c2b-819a-2c12956a837c" />
 
 <br>
 <br>
