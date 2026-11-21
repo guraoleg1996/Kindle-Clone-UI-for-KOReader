@@ -830,7 +830,56 @@ function Column.install(class, handlers, mirror)
     end
 end
 
+-- ───────────── Window resized / screen rotated ─────────────
+-- KOReader broadcasts SetDimensions and ScreenResize when the window is resized (computer)
+-- or the screen is rotated (phones, tablets, e-readers). An overlay laid out for the old
+-- size would stay broken, so each overlay either rebuilds itself for the new size
+-- (Resize.rebuild) or, for small pop-ups tied to a spot of the old layout, closes (Resize.close).
+local Resize = {}
+
+local function sizeKey()
+    return Screen:getWidth() .. "x" .. Screen:getHeight()
+end
+
+-- Both events arrive for one resize: the action runs once per new size.
+local function oncePerSize(class, action)
+    local init = class.init
+    class.init = function(self, ...)
+        self._kcui_size = sizeKey()
+        return init(self, ...)
+    end
+    local function handler(self)
+        local key = sizeKey()
+        if self._kcui_size == key then return end
+        self._kcui_size = key
+        action(self)
+    end
+    class.onSetDimensions = handler
+    class.onScreenResize = handler
+end
+
+-- rebuild(self) lays the widget out again for the new size. If that fails, the widget closes
+-- instead of staying half-drawn.
+function Resize.rebuild(class, rebuild)
+    oncePerSize(class, function(self)
+        local ok, err = pcall(rebuild, self)
+        if not ok then
+            logger.warn("KindleCloneUI: rebuild after resize failed:", err)
+            UIManager:nextTick(function() UIManager:close(self) end)
+        end
+        UIManager:setDirty("all", "ui")
+    end)
+end
+
+function Resize.close(class)
+    oncePerSize(class, function(self)
+        UIManager:nextTick(function() UIManager:close(self) end)
+        UIManager:setDirty("all", "ui")
+    end)
+end
+
 return {
+    Resize = Resize,
     Column = Column,
     Mirror = Mirror,
     State = State,

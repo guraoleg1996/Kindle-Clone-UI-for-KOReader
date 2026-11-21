@@ -253,12 +253,26 @@ local Sheet = InputContainer:extend{
     page = 1,
 }
 
-function Sheet:init()
+-- Размеры, шрифты и значки под текущий экран (при открытии и при изменении размера окна).
+function Sheet:layout()
     local sw, sh = Screen:getWidth(), Screen:getHeight()
-    self.dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh }
+    if not self.dimen then
+        self.dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh }
+    else
+        -- тот же объект: жесты ссылаются на него
+        self.dimen.w, self.dimen.h = sw, sh
+    end
     self.x0, self.cw = Common.Column.span()
-    self.height = math.min(R(1008), sh)
-    self.top = sh - self.height
+    -- на широком экране (компьютер, телефон на боку) окно стоит в рамке, как «Перейти»
+    self.framed = self.x0 > 0
+    self.gap = self.framed and U(14) or 0
+    self.border = U.ceil(1.5)
+    self.height = math.min(R(1008), sh - 2 * self.gap)
+    self.top = sh - self.gap - self.height
+    self.bottom = self.top + self.height
+    for _i, widget in ipairs(self.fixed or {}) do
+        widget:free()
+    end
     self.face = U.face("cfont", BODY_FONT)
     self.italic = U.face(KindleFonts.found.ui_italic or "cfont", BODY_FONT)
     self.letter_face = U.face("cfont", LETTER_FONT)
@@ -271,6 +285,10 @@ function Sheet:init()
     self.letter = TextWidget:new{ text = "A", face = self.letter_face }
     self.dim_letter = TextWidget:new{ text = "A", face = self.letter_face, fgcolor = Gray.inactive }
     self.fixed = { self.check, self.chevron, self.back, self.avatar, self.trash, self.letter, self.dim_letter }
+end
+
+function Sheet:init()
+    self:layout()
     self:build()
     self.ges_events = {
         TapSheet = { GestureRange:new{ ges = "tap", range = self.dimen } },
@@ -370,14 +388,14 @@ function Sheet:buildThemes()
             entry.note = self:fitted(_("Current Theme"), self.italic, column_w - R(125))
         end
     end
-    self.save_rect = Geom:new{ x = R(63), y = self.dimen.h - R(243), w = sw - 2 * R(63), h = R(95) }
+    self.save_rect = Geom:new{ x = R(63), y = self.bottom - R(243), w = sw - 2 * R(63), h = R(95) }
     self.save_color = self.selected.is_default and Gray.inactive or BLACK
     self.save_label = self:text(self.selected.kind == "custom" and _("Save Current Settings") or _("Set Theme as Default"),
         false, nil, self.save_color)
     self.save_label:setMaxWidth(self.save_rect.w - 2 * R(24))
     self.manage_label = self:text(_("Manage Themes"))
     self.manage_label:setMaxWidth(sw - 2 * R(63) - R(80))
-    self.manage_rect = Geom:new{ x = 0, y = self.dimen.h - R(111), w = sw, h = R(111) }
+    self.manage_rect = Geom:new{ x = 0, y = self.bottom - R(111), w = sw, h = R(111) }
 end
 
 function Sheet:slider(label, label_center, center, count, level, segment_w, pitch)
@@ -585,7 +603,7 @@ function Sheet:buildList()
     local sw = self.cw
     local row_h = R(112)
     local first_y = self.top + R(111)
-    list.per_page = math.max(1, math.floor((self.dimen.h - first_y) / row_h))
+    list.per_page = math.max(1, math.floor((self.bottom - first_y) / row_h))
     list.pages = math.max(1, math.ceil(#list.items / list.per_page))
     self.page = math.max(1, math.min(self.page, list.pages))
     list.title_label = self:text(list.title, true)
@@ -684,7 +702,7 @@ function Sheet:paintIcon(bb, entry)
 end
 
 function Sheet:paintThemes(bb)
-    local sw, sh = self.cw, self.dimen.h
+    local sw, sh = self.cw, self.bottom
     for _i, entry in ipairs(self.entries) do
         self:paintIcon(bb, entry)
         local label_x = entry.x + R(LABEL_X)
@@ -796,7 +814,7 @@ function Sheet:paintList(bb)
     end
     if list.pages > 1 then
         local track_y = self.top + R(125)
-        local track_h = self.dimen.h - R(14) - track_y
+        local track_h = self.bottom - R(14) - track_y
         local thumb_h = math.floor(track_h / list.pages)
         local x = sw - R(30)
         bb:paintRect(x, track_y, R(8), track_h, Gray.inactive)
@@ -808,7 +826,11 @@ function Sheet:paintTo(bb)
     local sw = self.cw
     local top = self.top
     bb:paintRect(0, top, sw, self.height, WHITE)
-    bb:paintRect(0, top, sw, R(5), BLACK)
+    if self.framed then
+        bb:paintBorder(0, top, sw, self.height, self.border, BLACK, U(4))
+    else
+        bb:paintRect(0, top, sw, R(5), BLACK)
+    end
     if self.list then
         local back = self.back:getSize()
         self.back:paintTo(bb, R(63), top + R(55) - math.floor(back.h / 2))
@@ -1055,7 +1077,7 @@ end
 
 function Sheet:onTapSheet(_ev, ges)
     local pos = ges.pos
-    if pos.y < self.top then
+    if pos.y < self.top or pos.y >= self.bottom then
         UIManager:close(self)
     elseif self.list then
         self:tapList(pos)
@@ -1109,6 +1131,12 @@ function Sheet:mirrorRect()
 end
 
 Common.Column.install(Sheet, { "onTapSheet", "onSwipeSheet" }, true)
+
+-- Окно изменили в размере (или повернули экран): та же вкладка и страница в новых размерах.
+Common.Resize.rebuild(Sheet, function(self)
+    self:layout()
+    self:build()
+end)
 
 local NameSheet = InputContainer:extend{
     ui = nil,
@@ -1239,6 +1267,11 @@ function NameSheet:onCloseWidget()
     end
     UIManager:setDirty(nil, "ui", self:region())
 end
+
+-- Окно изменили в размере: ввод имени отменяется, остаётся окно тем.
+Common.Resize.rebuild(NameSheet, function(self)
+    UIManager:nextTick(function() self:finish() end)
+end)
 
 Themes.fromPixels = option
 

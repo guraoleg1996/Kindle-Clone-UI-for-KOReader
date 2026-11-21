@@ -1865,6 +1865,24 @@ function Panel:onCloseWidget()
     end)
 end
 
+-- Окно изменили в размере (или повернули экран): панель строится заново под новые размеры,
+-- не закрываясь (без закрытия и повторного открытия окна).
+Common.Resize.rebuild(Panel, function(self)
+    if self.follow_auto then
+        UIManager:unschedule(self.follow_auto)
+        self.follow_auto = nil
+    end
+    if self.top and self.top.onCloseWidget then
+        self.top:onCloseWidget()
+    end
+    for _i, action in ipairs(self.actions or {}) do
+        if action.image then action.image:free() end
+        for _j, line in ipairs(action.lines or {}) do line:free() end
+    end
+    self:init()
+    self:onShow()
+end)
+
 function Panel.isDrawerShown()
     for _i, entry in ipairs(UIManager._window_stack) do
         if entry.widget.kcui_drawer then return true end

@@ -2789,15 +2789,19 @@ local function sortSections(fm)
     }
 end
 
-function Sheet:init()
-    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
-    self.chevron = ImageWidget:new{
+local function sheetChevron()
+    return ImageWidget:new{
         original_in_nightmode = false,
         file = ICONS .. "/statusbar/chevron.svg",
         width = U(63.81),
         height = math.floor(U(63.81) * 17 / 132),
         alpha = true,
     }
+end
+
+function Sheet:init()
+    self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
+    self.chevron = sheetChevron()
     self.offsets = {}
     self:build()
     self.ges_events = {
@@ -3035,6 +3039,14 @@ function Sheet:onCloseWidget()
     self.chevron:free()
     UIManager:setDirty(nil, "ui", self:region())
 end
+
+-- Окно изменили в размере (или повернули экран): окно сортировки / фильтров строится заново.
+Common.Resize.rebuild(Sheet, function(self)
+    self.dimen.w, self.dimen.h = Screen:getWidth(), Screen:getHeight()
+    self.chevron:free()
+    self.chevron = sheetChevron()
+    self:build()
+end)
 
 function Library.showOptions(fm)
     UIManager:show(Sheet:new{ fm = fm, sections = sortSections })

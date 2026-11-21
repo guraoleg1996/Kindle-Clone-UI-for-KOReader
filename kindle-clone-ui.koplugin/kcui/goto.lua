@@ -1315,6 +1315,18 @@ function GoTo.installReturns()
     end
 end
 
+-- Окно изменили в размере (или повернули экран): «Перейти» открывается заново в новых размерах
+-- на той же вкладке, а мелкие окна, привязанные к старой раскладке, закрываются.
+Common.Resize.rebuild(GoTo, function(self)
+    local ui, tab = self.ui, self.tab
+    UIManager:nextTick(function()
+        UIManager:close(self)
+        UIManager:show(GoTo:new{ ui = ui, tab = tab })
+    end)
+end)
+Common.Resize.close(Bookmarks)
+Common.Resize.close(ReturnBar)
+
 GoTo.Bookmarks = Bookmarks
 GoTo.dismissReturn = ReturnBar.dismiss
 

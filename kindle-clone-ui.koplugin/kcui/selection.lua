@@ -1486,4 +1486,8 @@ function Selection.install()
     end
 end
 
+-- Панели выделения привязаны к старой раскладке: при изменении размера окна они закрываются.
+Common.Resize.close(Palette)
+Common.Resize.close(SelectionBar)
+
 return Selection

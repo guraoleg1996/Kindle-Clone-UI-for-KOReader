@@ -543,6 +543,9 @@ FileManager.onToggleSelectMode = function(fm, ...)
     return result
 end
 
+-- Выпадающий список привязан к кнопке старой раскладки: при изменении размера окна он закрывается.
+Common.Resize.close(Dropdown)
+
 local Pill = Widget:extend{
     width = nil,
     height = nil,

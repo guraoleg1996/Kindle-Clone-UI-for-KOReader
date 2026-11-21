@@ -918,6 +918,8 @@ function WarmthPage.installSchedule(ui)
     end
 end
 
+Common.Resize.close(WarmthPage)
+
 function WarmthPage.pauseSchedule(ui)
     local aw = ui and ui.autowarmth
     if not aw or not aw.activate or aw.activate == 0 then return end

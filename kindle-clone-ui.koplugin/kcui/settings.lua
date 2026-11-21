@@ -89,11 +89,17 @@ local function paginate(rows, room)
     return pages
 end
 
-function Window:init()
+-- Размеры и шапка под текущий экран (вызывается и при открытии, и при изменении размера окна).
+function Window:layout()
     local sw, sh = Screen:getWidth(), Screen:getHeight()
-    self.dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh }
-    -- на широком экране список стоит по центру колонкой, а не растянут на весь монитор
-    self.x0, self.cw = Common.Column.span(760)
+    if not self.dimen then
+        self.dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh }
+    else
+        -- тот же объект: жесты ссылаются на него
+        self.dimen.w, self.dimen.h = sw, sh
+    end
+    -- список занимает всю ширину окна
+    self.x0, self.cw = 0, sw
     self.rtl = Common.Mirror.active()
     self.pad = U(21.27)
     self.min_row = math.max(U(40), math.floor(U(54) * U.rowScale()))
@@ -103,8 +109,13 @@ function Window:init()
     self.line = Divider.height
 
     local Panel = require("kcui/panel")
+    if self.top and self.top.onCloseWidget then self.top:onCloseWidget() end
     self.top = Panel.TopBar.new(self.ui, function() return self end, false)
     self.top_h = self.top.dimen.h
+end
+
+function Window:init()
+    self:layout()
 
     self.ges_events = {
         TapSettings = { GestureRange:new{ ges = "tap", range = self.dimen } },
@@ -127,6 +138,65 @@ end
 -- Первый уровень: сразу содержимое вкладки «Настройки» родного меню KOReader
 -- (без промежуточного списка вкладок). Если такой вкладки вдруг нет —
 -- запасной вариант: список всех вкладок.
+-- Порядок разделов первого уровня. У KOReader «Яркость» и «Ночной режим» лежат отдельно от
+-- «Экрана», а разделы идут вперемешку («Сеть» рядом с «Экраном»). Здесь «Яркость» и «Ночной
+-- режим» переехали внутрь «Экрана», а разделы стоят по смыслу: экран, управление, чтение,
+-- затем сеть, язык и устройство.
+local ROOT_ORDER = { "screen", "taps_and_gestures", "navigation", "document", "network", "language", "device" }
+local SCREEN_ITEMS = { "frontlight", "night_mode" }
+
+local function copyItem(item)
+    -- копия: список KOReader остаётся как был (его же показывает стандартное меню)
+    local copy = {}
+    for key, value in pairs(item) do copy[key] = value end
+    copy.separator = nil
+    return copy
+end
+
+local function arrange(items)
+    local by_id, listed = {}, {}
+    for _i, item in ipairs(items) do
+        if type(item) == "table" and item.id and not by_id[item.id] then by_id[item.id] = item end
+    end
+    local moved = {}
+    for _i, id in ipairs(SCREEN_ITEMS) do
+        if by_id[id] then
+            table.insert(moved, copyItem(by_id[id]))
+            listed[by_id[id]] = true
+        end
+    end
+    local result = {}
+    for _i, id in ipairs(ROOT_ORDER) do
+        local item = by_id[id]
+        if item then
+            listed[item] = true
+            local entry = copyItem(item)
+            if id == "screen" and #moved > 0 then
+                -- «Яркость» и «Ночной режим» идут в начале раздела «Экран»
+                local original, extra = item, moved
+                entry.sub_item_table = nil
+                entry.sub_item_table_func = function()
+                    local list = {}
+                    for _j, moved_item in ipairs(extra) do table.insert(list, moved_item) end
+                    local rest = original.sub_item_table
+                    if original.sub_item_table_func then rest = original.sub_item_table_func() end
+                    for _j, rest_item in ipairs(rest or {}) do table.insert(list, rest_item) end
+                    return list
+                end
+                moved = {}
+            end
+            table.insert(result, entry)
+        end
+    end
+    -- нет раздела «Экран» (на таком устройстве его не бывает): пункты остаются сверху
+    for index = #moved, 1, -1 do table.insert(result, 1, moved[index]) end
+    -- пункты, которых здесь нет (их добавили другие плагины), остаются в конце, в прежнем порядке
+    for _i, item in ipairs(items) do
+        if type(item) == "table" and not listed[item] then table.insert(result, copyItem(item)) end
+    end
+    return result
+end
+
 function Window:rootItems()
     local menu = self.ui and self.ui.menu
     local tabs = menu and menu.tab_item_table
@@ -136,7 +206,7 @@ function Window:rootItems()
         if tab.icon == "appbar.settings" then
             local sub = tab.sub_item_table or tab
             if type(sub) == "table" and #sub > 0 then
-                return sub
+                return arrange(sub)
             end
         end
     end
@@ -201,7 +271,7 @@ function Window:makeRow(item)
     if text == "" then return nil end
     -- «Подсветка» открывает окно с ползунком «Яркость»: называем пункт так же,
     -- как у Kindle и как ползунок внутри («Яркость»), чтобы слова не расходились.
-    if #self.stack == 1 and text == require("gettext")("Frontlight") then
+    if text == require("gettext")("Frontlight") then
         text = _("Brightness")
     end
     local row = { item = item, text = text, widgets = {} }
@@ -264,8 +334,8 @@ function Window:makeRow(item)
     table.insert(row.widgets, widget)
     row.text_h = widget:getSize().h
     row.h = math.max(self.min_row, row.text_h + 2 * self.v_pad)
-    row.separator = item.separator and true or false
-    if row.separator then row.h = row.h + U(8) end
+    -- все разделительные линии одинаковые: пометки «separator» из KOReader не используются
+    row.separator = false
     return row
 end
 
@@ -355,6 +425,13 @@ end
 function Window:onResume()
     if self.top then self.top:handleEvent(Event:new("Resume")) end
 end
+
+-- Окно изменили в размере (или повернули экран): тот же список, тот же уровень и страница.
+Common.Resize.rebuild(Window, function(self)
+    if self.closed then return end
+    self:layout()
+    self:rebuild(self.page)
+end)
 
 -- ───────────── Рисование ─────────────
 
